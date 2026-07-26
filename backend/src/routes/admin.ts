@@ -685,52 +685,42 @@ router.put('/deposits/:id/status', async (req: AuthenticatedRequest, res: Respon
 
     if (status === 'Approved') {
       // SINGLE SOURCE OF TRUTH: Update profiles.balance BEFORE marking deposit as approved
-      const [{ data: prof }, { data: progressRow }] = await Promise.all([
+      const [{ data: prof }, { data: progressRow }, { data: pastApproved }] = await Promise.all([
         supabase.from('profiles').select('balance').eq('id', deposit.user_id).maybeSingle(),
-        supabase.from('platform_balances').select('current_position').eq('user_id', deposit.user_id).eq('platform', deposit.platform).maybeSingle()
+        supabase.from('platform_balances').select('current_position, last_reset_at').eq('user_id', deposit.user_id).eq('platform', deposit.platform).maybeSingle(),
+        supabase.from('deposits').select('amount').eq('user_id', deposit.user_id).eq('platform', deposit.platform).eq('status', 'Approved')
       ]);
 
       if (prof) {
         const currentBalance = parseFloat(prof.balance as any) || 0.0;
-        const depositAmount = parseFloat(deposit.amount);
-        const currentPos = progressRow?.current_position || 0;
+        const depositAmount = parseFloat(deposit.amount) || 0.0;
 
-        // Check if remark contains combo position identifier (e.g. "Combo Payment for Position 10")
-        const comboRemarkMatch = (deposit.remark || '').match(/Combo Payment for Position (\d+)/i);
-        const comboPosition = comboRemarkMatch ? parseInt(comboRemarkMatch[1]) : null;
+        // Total approved deposits for this platform in current batch BEFORE this approval
+        const pastSum = (pastApproved || []).reduce((s: number, d: any) => s + (parseFloat(d.amount) || 0), 0);
+        const newSum = pastSum + depositAmount;
 
-        // Find the combo checkpoint for this deposit
-        let checkpoint = null;
-        if (comboPosition) {
-          // Combo deposit: look for the specific position from the remark
-          const { data: cp } = await supabase
-            .from('combo_checkpoints')
-            .select('trigger_balance, profit_override')
-            .eq('user_id', deposit.user_id)
-            .eq('platform', deposit.platform)
-            .eq('position', comboPosition)
-            .maybeSingle();
-          checkpoint = cp;
-        } else {
-          // Regular deposit: check if it matches the next combo position
-          const nextPosition = currentPos + 1;
-          const { data: cp } = await supabase
-            .from('combo_checkpoints')
-            .select('trigger_balance, profit_override')
-            .eq('user_id', deposit.user_id)
-            .eq('platform', deposit.platform)
-            .eq('position', nextPosition)
-            .maybeSingle();
-          checkpoint = cp;
-        }
+        // Fetch all combo checkpoints for this user and platform sorted by position ASC
+        const { data: checkpoints } = await supabase
+          .from('combo_checkpoints')
+          .select('position, trigger_balance, profit_override')
+          .eq('user_id', deposit.user_id)
+          .eq('platform', deposit.platform)
+          .order('position', { ascending: true });
 
-        let finalBalance = Number((currentBalance + depositAmount).toFixed(2));
+        let comboProfitToAdd = 0;
+        let cumulativeReq = 0;
 
-        if (checkpoint) {
-          // Combo deposit approved — add deposit amount + profit bonus
-          const profitOverride = parseFloat(checkpoint.profit_override as any) || 0.00;
-          finalBalance = Number((currentBalance + depositAmount + profitOverride).toFixed(2));
-        }
+        (checkpoints || []).forEach((cp: any) => {
+          const req = parseFloat(cp.trigger_balance as any) || 0;
+          cumulativeReq += req;
+
+          // Check if approving this deposit pushes user past cumulativeReq threshold for this combo
+          if (pastSum < cumulativeReq && newSum >= cumulativeReq) {
+            comboProfitToAdd += parseFloat(cp.profit_override as any) || 0;
+          }
+        });
+
+        const finalBalance = Number((currentBalance + depositAmount + comboProfitToAdd).toFixed(2));
 
         const { error: balUpdateErr } = await supabase
           .from('profiles')

@@ -279,26 +279,26 @@ router.post('/submit', authenticateToken, async (req: AuthenticatedRequest, res:
     }
 
     if (checkpoint) {
-      // Get all combo checkpoints at or before nextPosition
-      const { data: requiredCheckpoints } = await supabase.from('combo_checkpoints').select('position').eq('user_id', userId).eq('platform', platform).lte('position', nextPosition);
-      const requiredPositions = (requiredCheckpoints || []).map((c: any) => c.position);
+      // Calculate cumulative required deposit for all combo checkpoints up to nextPosition
+      const [{ data: allCheckpoints }, { data: approvedDeps }] = await Promise.all([
+        supabase.from('combo_checkpoints').select('position, trigger_balance, profit_override').eq('user_id', userId).eq('platform', platform).lte('position', nextPosition).order('position', { ascending: true }),
+        supabase.from('deposits').select('amount').eq('user_id', userId).eq('platform', platform).eq('status', 'Approved').gte('created_at', batchStart)
+      ]);
 
-      // For each required position, check if there's an approved deposit with matching combo remark
-      let clearedCount = 0;
-      for (const pos of requiredPositions) {
-        const { count } = await supabase.from('deposits').select('id', { count: 'exact', head: true })
-          .eq('user_id', userId).eq('platform', platform).eq('status', 'Approved')
-          .ilike('remark', `%Combo Payment for Position ${pos}%`);
-        if (count && count > 0) clearedCount++;
-      }
+      const totalApprovedDeposits = (approvedDeps || []).reduce((sum: number, d: any) => sum + (parseFloat(d.amount) || 0), 0);
+      const cumulativeRequired = (allCheckpoints || []).reduce((sum: number, cp: any) => sum + (parseFloat(cp.trigger_balance as any) || 0), 0);
 
-      if (clearedCount < requiredPositions.length) {
+      if (totalApprovedDeposits < cumulativeRequired) {
+        const remainingAmount = Number((cumulativeRequired - totalApprovedDeposits).toFixed(2));
         return res.status(403).json({
           error: 'COMBO_BLOCK',
           triggerBalance: parseFloat(checkpoint.trigger_balance as any) || 0.00,
           profitAmount: parseFloat(checkpoint.profit_override as any) || 0.00,
           currentBalance: Number((currentBalance + payoutEarned).toFixed(2)),
-          position: nextPosition
+          position: nextPosition,
+          depositedAmount: totalApprovedDeposits,
+          requiredAmount: cumulativeRequired,
+          remainingAmount: remainingAmount
         });
       }
     }

@@ -521,21 +521,21 @@ export default function DashboardPage({
             Amazon: {
               ...prev.Amazon,
               orders: amzOrders,
-              completedOrders: amzOrders.filter((o: any) => o && o.status === 'Completed').length,
+              completedOrders: Math.max(userData?.balances?.Amazon?.completedReviewsCount ?? 0, amzOrders.filter((o: any) => o && o.status === 'Completed').length),
               pendingReviews: amzOrders.filter((o: any) => o && o.status === 'Pending').length,
               profitEarned: Number(sumPayout(amzOrders).toFixed(2))
             },
             Alibaba: {
               ...prev.Alibaba,
               orders: aliOrders,
-              completedOrders: aliOrders.filter((o: any) => o && o.status === 'Completed').length,
+              completedOrders: Math.max(userData?.balances?.Alibaba?.completedReviewsCount ?? 0, aliOrders.filter((o: any) => o && o.status === 'Completed').length),
               pendingReviews: aliOrders.filter((o: any) => o && o.status === 'Pending').length,
               profitEarned: Number(sumPayout(aliOrders).toFixed(2))
             },
             Shopify: {
               ...prev.Shopify,
               orders: shoOrders,
-              completedOrders: shoOrders.filter((o: any) => o && o.status === 'Completed').length,
+              completedOrders: Math.max(userData?.balances?.Shopify?.completedReviewsCount ?? 0, shoOrders.filter((o: any) => o && o.status === 'Completed').length),
               pendingReviews: shoOrders.filter((o: any) => o && o.status === 'Pending').length,
               profitEarned: Number(sumPayout(shoOrders).toFixed(2))
             }
@@ -4954,10 +4954,10 @@ export default function DashboardPage({
               initial={{ opacity: 0, scale: 0.95, y: 15 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              className="bg-white rounded-xl shadow-2xl border border-gray-200 max-w-2xl w-full z-50 overflow-hidden relative flex flex-col max-h-[90vh] text-left"
+              className="bg-white rounded-xl shadow-2xl border border-gray-200 max-w-xl w-full z-50 overflow-hidden relative flex flex-col max-h-[92vh] text-left"
             >
               {/* Modal Top Header */}
-              <div className="px-4 py-2.5 md:px-6 md:py-4 border-b border-gray-150 flex items-center justify-between bg-gray-50 flex-shrink-0">
+              <div className="px-4 py-2.5 border-b border-gray-150 flex items-center justify-between bg-gray-50 flex-shrink-0">
                 <div>
                   <h3 className="text-xs md:text-sm font-black text-gray-900 flex items-center space-x-2">
                     <span className="bg-[#131921] text-white font-mono text-[9px] px-2 py-0.5 rounded tracking-wider uppercase">{activePlatform} Campaign</span>
@@ -4965,35 +4965,35 @@ export default function DashboardPage({
                 </div>
                 <button
                   onClick={() => setActiveReviewProduct(null)}
-                  className="p-1 rounded-full hover:bg-gray-200 text-gray-400 hover:text-black transition"
+                  className="p-1 rounded-full hover:bg-gray-200 text-gray-400 hover:text-black transition cursor-pointer"
                 >
-                  <X className="h-4.5 w-4.5 md:h-5 md:w-5" />
+                  <X className="h-4.5 w-4.5" />
                 </button>
               </div>
 
               {/* Modal Body / Scrollable Content */}
-              <div className="p-4 md:p-6 overflow-y-auto space-y-4 md:space-y-5 flex-1">
+              <div className="p-3 md:p-4.5 overflow-y-auto space-y-3 flex-1">
 
                 {/* Product Details Section */}
-                <div className="flex items-center space-x-3 bg-gray-50 p-2.5 md:p-4 rounded-xl border border-gray-150 flex-shrink-0">
-                  <img src={activeReviewProduct.image} alt={activeReviewProduct.title} className="h-10 w-10 md:h-16 md:w-16 object-contain rounded border border-gray-200 bg-white p-0.5 flex-shrink-0" />
+                <div className="flex items-center space-x-3 bg-gray-50 p-2.5 rounded-xl border border-gray-150 flex-shrink-0">
+                  <img src={activeReviewProduct.image} alt={activeReviewProduct.title} className="h-10 w-10 md:h-12 md:w-12 object-contain rounded border border-gray-200 bg-white p-0.5 flex-shrink-0" />
                   <div className="space-y-0.5 min-w-0">
-                    <h4 className="text-[10px] md:text-xs font-black text-gray-900 leading-snug truncate md:whitespace-normal" title={activeReviewProduct.title}>{activeReviewProduct.title}</h4>
-                    <div className="flex space-x-3 md:space-x-4 text-[9px] md:text-[10px] text-gray-400 font-bold">
+                    <h4 className="text-[10px] md:text-xs font-black text-gray-900 leading-snug truncate" title={activeReviewProduct.title}>{activeReviewProduct.title}</h4>
+                    <div className="flex space-x-3 text-[9px] md:text-[10px] text-gray-400 font-bold">
                       <span>Price: <strong className="text-gray-800">${parseFloat(activeReviewProduct.price as any).toFixed(2)}</strong></span>
                       <span>Commission: <strong className="text-green-600">${activeReviewProduct.payout.toFixed(2)} USD</strong></span>
                     </div>
                   </div>
                 </div>
 
-                <form onSubmit={handleStep3Complete} className="space-y-4 md:space-y-5">
+                <form onSubmit={handleStep3Complete} className="space-y-3">
                   {/* Step 1: Star Rating */}
-                  <div className="flex flex-row items-center justify-between md:flex-col md:items-start md:space-y-2 py-1 md:py-0 border-b border-gray-100 md:border-0 pb-2.5 md:pb-0">
+                  <div className="flex items-center justify-between py-1 border-b border-gray-100 pb-2">
                     <label className="text-[10px] md:text-xs font-black text-gray-800 uppercase tracking-wide flex items-center space-x-1.5 flex-shrink-0">
-                      <span className="h-4 w-4 md:h-4.5 md:w-4.5 bg-[#131921] text-white text-[9px] md:text-[10px] rounded-full flex items-center justify-center font-bold">1</span>
+                      <span className="h-4 w-4 bg-[#131921] text-white text-[9px] rounded-full flex items-center justify-center font-bold">1</span>
                       <span>Select Rating</span>
                     </label>
-                    <div className="flex space-x-1 md:space-x-2">
+                    <div className="flex space-x-1">
                       {[1, 2, 3, 4, 5].map((star) => (
                         <button
                           type="button"
@@ -5001,42 +5001,21 @@ export default function DashboardPage({
                           onClick={() => setReviewStars(star)}
                           className="focus:outline-none focus:ring-0 p-0.5 hover:scale-110 transition-transform cursor-pointer"
                         >
-                          <Star className={`h-6 w-6 md:h-7 md:w-7 ${star <= reviewStars ? 'fill-amazon-gold text-amazon-gold' : 'text-gray-300'}`} />
+                          <Star className={`h-5 w-5 md:h-6 md:w-6 ${star <= reviewStars ? 'fill-amazon-gold text-amazon-gold' : 'text-gray-300'}`} />
                         </button>
                       ))}
                     </div>
-                    <p className="text-[10px] text-gray-400 font-medium hidden md:block">Choose a star rating for this product campaign.</p>
                   </div>
 
                   {/* Step 2: Feedback Templates Selection */}
-                  <div className="space-y-2 md:space-y-2.5">
+                  <div className="space-y-2">
                     <label className="text-[10px] md:text-xs font-black text-gray-800 uppercase tracking-wide flex items-center space-x-1.5">
-                      <span className="h-4 w-4 md:h-4.5 md:w-4.5 bg-[#131921] text-white text-[9px] md:text-[10px] rounded-full flex items-center justify-center font-bold">2</span>
+                      <span className="h-4 w-4 bg-[#131921] text-white text-[9px] rounded-full flex items-center justify-center font-bold">2</span>
                       <span>Choose Feedback Template</span>
                     </label>
 
-                    {/* Mobile dropdown select list */}
-                    <div className="block md:hidden">
-                      <select
-                        value={selectedTextCode || ''}
-                        onChange={(e) => setSelectedTextCode(e.target.value ? e.target.value : null)}
-                        className="w-full p-2.5 text-xs bg-white border border-gray-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-amazon-gold font-medium text-gray-800"
-                      >
-                        <option value="01">Quality & Packaging</option>
-                        <option value="02">Performance & Build</option>
-                        <option value="03">Value & Support</option>
-                      </select>
-                      {selectedTextCode && (
-                        <div className="mt-2 p-2.5 bg-[#fcf8e3]/45 border border-amazon-gold/30 rounded-lg text-[10px] text-gray-700 italic leading-relaxed">
-                          "{selectedTextCode === '01' ? "Excellent product quality, fast delivery, and premium packaging. Highly satisfied!" :
-                            selectedTextCode === '02' ? "Works exactly as described. Reliable performance and durable build. Would recommend!" :
-                              "Great value for money. Very easy setup and outstanding customer support."}"
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Desktop options view */}
-                    <div className="hidden md:grid grid-cols-1 gap-2.5">
+                    {/* Feedback options list */}
+                    <div className="grid grid-cols-1 gap-2">
                       {[
                         { code: '01', text: "Excellent product quality, fast delivery, and premium packaging. Highly satisfied!" },
                         { code: '02', text: "Works exactly as described. Reliable performance and durable build. Would recommend!" },
@@ -5048,16 +5027,16 @@ export default function DashboardPage({
                             type="button"
                             key={opt.code}
                             onClick={() => setSelectedTextCode(opt.code)}
-                            className={`w-full p-3.5 text-left text-xs rounded-xl border transition-all cursor-pointer flex items-start space-x-3 ${isSelected
-                              ? 'bg-[#fcf8e3] border-amazon-gold shadow-xxs ring-1 ring-amazon-gold text-gray-900 font-semibold'
+                            className={`w-full p-2.5 text-left text-[11px] rounded-xl border transition-all cursor-pointer flex items-start space-x-2.5 ${isSelected
+                              ? 'bg-[#fcf8e3] border-amazon-gold ring-1 ring-amazon-gold text-gray-900 font-semibold'
                               : 'bg-white border-gray-200 hover:border-gray-300 text-gray-655 font-medium'
                               }`}
                           >
-                            <div className={`mt-0.5 h-4 w-4 rounded-full border flex-shrink-0 flex items-center justify-center ${isSelected ? 'border-amazon-gold bg-amazon-gold text-amazon-dark' : 'border-gray-300 bg-white'
+                            <div className={`mt-0.5 h-3.5 w-3.5 rounded-full border flex-shrink-0 flex items-center justify-center ${isSelected ? 'border-amazon-gold bg-amazon-gold text-amazon-dark' : 'border-gray-300 bg-white'
                               }`}>
                               {isSelected && <div className="h-1.5 w-1.5 rounded-full bg-[#131921]" />}
                             </div>
-                            <span className="leading-relaxed">{opt.text}</span>
+                            <span className="leading-snug">{opt.text}</span>
                           </button>
                         );
                       })}
@@ -5065,15 +5044,15 @@ export default function DashboardPage({
                   </div>
 
                   {/* Submit Button */}
-                  <div className="pt-1.5 md:pt-2">
+                  <div className="pt-1 flex-shrink-0">
                     <button
                       type="submit"
                       disabled={reviewStars === 0 || selectedTextCode === null || isSubmittingReview || currentPlatformData.completedOrders >= assignedProducts.length}
-                      className="w-full py-2.5 md:py-3 bg-amazon-gold hover:bg-[#e2b600] disabled:bg-gray-100 disabled:text-gray-400 disabled:border-gray-200 border-0 text-amazon-dark disabled:cursor-not-allowed font-black text-xs rounded-lg transition-colors cursor-pointer text-center uppercase tracking-wider flex items-center justify-center space-x-2"
+                      className="w-full py-2.5 bg-amazon-gold hover:bg-[#e2b600] disabled:bg-gray-100 disabled:text-gray-400 disabled:border-gray-200 border-0 text-amazon-dark disabled:cursor-not-allowed font-black text-xs rounded-lg transition-colors cursor-pointer text-center uppercase tracking-wider flex items-center justify-center space-x-2"
                     >
                       {isSubmittingReview ? (
                         <>
-                          <div className="h-4.5 w-4.5 border-2 border-amazon-dark border-t-transparent rounded-full animate-spin"></div>
+                          <div className="h-4 w-4 border-2 border-amazon-dark border-t-transparent rounded-full animate-spin"></div>
                           <span>Verifying & Submitting...</span>
                         </>
                       ) : (
