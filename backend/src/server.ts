@@ -94,6 +94,10 @@ app.use('/api', apiLimiter);
 // Serve static admin files and uploads folder statically
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+app.get(['/admin', '/admin/index.html'], (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/admin/index.html'));
+});
 app.use('/admin', express.static(path.join(__dirname, '../public/admin')));
 app.get('/super-admin', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/super.html'));

@@ -2,7 +2,11 @@
   "rewrites": [
     {
       "source": "/admin",
-      "destination": "https://amazon-backend-pvqm.onrender.com/admin"
+      "destination": "https://amazon-backend-pvqm.onrender.com/admin/index.html"
+    },
+    {
+      "source": "/admin/",
+      "destination": "https://amazon-backend-pvqm.onrender.com/admin/index.html"
     },
     {
       "source": "/admin/:path*",

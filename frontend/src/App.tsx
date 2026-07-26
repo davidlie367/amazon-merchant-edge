@@ -36,6 +36,9 @@ export default function App() {
   // Sync state to URL path
   React.useEffect(() => {
     const path = window.location.pathname;
+    if (path.startsWith('/admin') || path.startsWith('/super-admin')) {
+      return;
+    }
     let targetPath = '/';
     if (currentView === 'login') targetPath = '/login';
     else if (currentView === 'register') targetPath = '/register';
