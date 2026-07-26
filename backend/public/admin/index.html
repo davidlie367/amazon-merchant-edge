@@ -4234,14 +4234,23 @@
           saveBtn.disabled = false;
           saveBtn.className = 'bg-amber-500 hover:bg-amber-600 text-white font-black px-6 py-2.5 rounded-lg shadow-sm cursor-pointer transition-colors border-0 text-xs';
         }
-      } else {
+      } else if (count === 25) {
         if (countEl) {
-          countEl.textContent = `${count}/25 products selected — Ready to save`;
+          countEl.textContent = `25/25 products selected — Ready to save batch`;
           countEl.className = 'text-green-700 font-black text-[10px]';
         }
         if (saveBtn) {
           saveBtn.disabled = false;
           saveBtn.className = 'bg-green-600 hover:bg-green-700 text-white font-black px-6 py-2.5 rounded-lg shadow-sm cursor-pointer transition-colors border-0 text-xs';
+        }
+      } else {
+        if (countEl) {
+          countEl.textContent = `${count}/25 products — Select ${25 - count} more to complete 25/25 batch`;
+          countEl.className = 'text-amber-600 font-bold text-[10px]';
+        }
+        if (saveBtn) {
+          saveBtn.disabled = true;
+          saveBtn.className = 'bg-gray-400 text-gray-200 font-black px-6 py-2.5 rounded-lg shadow-sm cursor-not-allowed border-0 text-xs';
         }
       }
 

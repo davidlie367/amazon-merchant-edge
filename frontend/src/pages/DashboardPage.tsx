@@ -563,6 +563,92 @@ export default function DashboardPage({
         })));
       }
 
+      // 6. Dynamically build notifications list
+      const dynamicNotifs: any[] = [];
+      dynamicNotifs.push({
+        id: 'welcome-1',
+        title: 'Welcome to Amazon Merchant Edge',
+        message: `👋 Welcome ${username}! Your account is active. Select a workspace to get started.`,
+        time: 'System',
+        status: 'unread',
+        type: 'system'
+      });
+
+      if (historyRes.ok) {
+        const rawHistoryData = await historyRes.json();
+        const historyData = Array.isArray(rawHistoryData) ? rawHistoryData : [];
+        historyData.forEach((tx: any) => {
+          const amount = parseFloat(tx.amount) || 0;
+          const status = tx.status || 'Pending';
+          const timeStr = tx.created_at ? new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent';
+          if (tx.type === 'Deposit') {
+            if (status === 'Approved') {
+              dynamicNotifs.push({
+                id: `dep-app-${tx.id}`,
+                title: 'Deposit Approved',
+                message: `✅ Deposit Approved: $${amount.toFixed(2)} credited to your wallet balance.`,
+                time: timeStr,
+                status: 'unread',
+                type: 'deposit'
+              });
+            } else if (status === 'Pending') {
+              dynamicNotifs.push({
+                id: `dep-pend-${tx.id}`,
+                title: 'Deposit Submitted',
+                message: `⏳ Deposit Submitted: $${amount.toFixed(2)} is currently under admin review.`,
+                time: timeStr,
+                status: 'unread',
+                type: 'deposit'
+              });
+            } else if (status === 'Rejected') {
+              dynamicNotifs.push({
+                id: `dep-rej-${tx.id}`,
+                title: 'Deposit Declined',
+                message: `❌ Deposit Declined: $${amount.toFixed(2)} request was not approved.`,
+                time: timeStr,
+                status: 'unread',
+                type: 'deposit'
+              });
+            }
+          } else if (tx.type === 'Withdrawal') {
+            if (status === 'Approved') {
+              dynamicNotifs.push({
+                id: `with-app-${tx.id}`,
+                title: 'Withdrawal Approved',
+                message: `🎉 Withdrawal Approved: $${amount.toFixed(2)} sent to your wallet address!`,
+                time: timeStr,
+                status: 'unread',
+                type: 'withdrawal'
+              });
+            } else if (status === 'Pending') {
+              dynamicNotifs.push({
+                id: `with-pend-${tx.id}`,
+                title: 'Withdrawal Pending',
+                message: `💸 Withdrawal Requested: $${amount.toFixed(2)} is pending admin approval.`,
+                time: timeStr,
+                status: 'unread',
+                type: 'withdrawal'
+              });
+            }
+          }
+        });
+      }
+
+      if (userData && userData.unlockedPlatforms) {
+        userData.unlockedPlatforms.forEach((plat: string) => {
+          dynamicNotifs.push({
+            id: `unlock-${plat}`,
+            title: `Workspace Unlocked (${plat})`,
+            message: `🚀 Workspace Unlocked: 25 products assigned to your ${plat} workspace!`,
+            time: 'Active',
+            status: 'unread',
+            type: 'system'
+          });
+        });
+      }
+
+      setNotifications(dynamicNotifs);
+
       setLastRefreshed(new Date().toLocaleTimeString());
       return userData;
     } catch (err) {
@@ -571,7 +657,7 @@ export default function DashboardPage({
     } finally {
       setIsDataLoading(false);
     }
-  }, [onLogout]);
+  }, [onLogout, username]);
 
   // Keep ref current so WebSocket callback always calls latest version
   useEffect(() => {
@@ -580,7 +666,7 @@ export default function DashboardPage({
 
   useEffect(() => {
     fetchAllData();
-    const interval = setInterval(fetchAllData, 60000);
+    const interval = setInterval(fetchAllData, 5000);
     return () => clearInterval(interval);
   }, []); // fetchAllData fetches ALL platforms — no need to re-run on platform switch
 
