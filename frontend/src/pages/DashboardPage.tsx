@@ -686,21 +686,15 @@ export default function DashboardPage({
         return;
       }
 
-      const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      let wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       let wsHost = 'localhost:5000';
-      try {
-        if (API_BASE.startsWith('http')) {
-          const urlObj = new URL(API_BASE);
-          wsHost = urlObj.host;
-        } else {
-          wsHost = window.location.host;
-        }
-      } catch (e) {
-        if (API_BASE.includes('localhost')) {
-          wsHost = 'localhost:5000';
-        } else {
-          wsHost = window.location.host;
-        }
+
+      // Direct connection to Render backend when deployed on cloud domain (Vercel proxies don't support WS upgrade)
+      if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        wsProto = 'wss:';
+        wsHost = 'amazon-backend-pvqm.onrender.com';
+      } else if (typeof window !== 'undefined' && window.location.port === '3000') {
+        wsHost = 'localhost:5000';
       }
 
       const wsUrl = `${wsProto}//${wsHost}?token=${encodeURIComponent(token)}`;

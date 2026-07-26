@@ -319,11 +319,21 @@ router.post('/submit', authenticateToken, async (req: AuthenticatedRequest, res:
       return res.status(400).json({ error: progressError ? 'Failed to update review progress: ' + progressError.message : 'Order limit reached. Another submission was processed concurrently.' });
     }
 
-    // Insert submission
-    const { data: submission, error: insertError } = await supabase
+    // Insert submission (with fallback if schema cache lacks platform column)
+    let { data: submission, error: insertError } = await supabase
       .from('review_submissions')
       .insert({ user_id: userId, product_id: productId, order_id: finalOrderId, review_text: reviewText, payout_earned: payoutEarned, status: 'Completed', platform })
       .select().single();
+
+    if (insertError && (insertError.message.includes('platform') || insertError.message.includes('schema cache'))) {
+      console.warn("Retrying review_submissions insert without platform column:", insertError.message);
+      const retry = await supabase
+        .from('review_submissions')
+        .insert({ user_id: userId, product_id: productId, order_id: finalOrderId, review_text: reviewText, payout_earned: payoutEarned, status: 'Completed' })
+        .select().single();
+      submission = retry.data;
+      insertError = retry.error;
+    }
 
     if (insertError) {
       console.error("Insert failed, rolling back:", insertError.message);
