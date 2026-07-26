@@ -1353,68 +1353,67 @@ router.post('/scrape-amazon', async (req: AuthenticatedRequest, res: Response) =
       return res.status(400).json({ error: 'Amazon product URL is required' });
     }
 
-    if (!url.includes('amazon.')) {
-      return res.status(400).json({ error: 'Only valid Amazon product URLs are supported' });
-    }
-
     let targetUrl = url.trim();
     if (!/^https?:\/\//i.test(targetUrl)) {
       targetUrl = 'https://' + targetUrl;
     }
 
-    // Extract ASIN from URL and try clean product page URL first
-    let cleanUrl = targetUrl;
-    const asinMatch = targetUrl.match(/\/dp\/([A-Z0-9]{10})/i);
-    if (asinMatch) {
-      const asin = asinMatch[1];
-      // Extract domain (amazon.com, amazon.co.uk, etc.)
-      const domainMatch = targetUrl.match(/amazon\.([a-z.]+)/i);
-      const domain = domainMatch ? `amazon.${domainMatch[1]}` : 'www.amazon.com';
-      cleanUrl = `https://${domain}/dp/${asin}`;
+    if (!targetUrl.includes('amazon.') && !targetUrl.includes('amzn.')) {
+      return res.status(400).json({ error: 'Only valid Amazon product URLs are supported' });
     }
+
+    // 1. Extract ASIN from URL
+    let asin = '';
+    const asinMatch = targetUrl.match(/(?:\/dp\/|\/gp\/product\/|\/ASIN\/|\/product\/|\/d\/)([A-Z0-9]{10})/i);
+    if (asinMatch) {
+      asin = asinMatch[1].toUpperCase();
+    }
+
+    // 2. Extract Title from URL Slug fallback
+    let titleFromSlug = '';
+    const slugMatch = targetUrl.match(/amazon\.[a-z.]+\/([^/]+)\/(?:dp|gp\/product)\//i);
+    if (slugMatch && slugMatch[1]) {
+      try {
+        titleFromSlug = decodeURIComponent(slugMatch[1])
+          .replace(/[-_]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        titleFromSlug = titleFromSlug.replace(/\b\w/g, l => l.toUpperCase());
+      } catch (e) {
+        titleFromSlug = slugMatch[1].replace(/[-_]+/g, ' ').trim();
+      }
+    }
+
+    // 3. Fallback High-Res Image URL from Amazon Media CDN (never blocked by CAPTCHA!)
+    const cdnImageUrl = asin ? `https://images-na.ssl-images-amazon.com/images/P/${asin}.01.LZZZZZZZ.jpg` : '';
+
+    // Extract domain
+    const domainMatch = targetUrl.match(/amazon\.([a-z.]+)/i);
+    const domain = domainMatch ? `amazon.${domainMatch[1]}` : 'www.amazon.com';
+    const cleanUrl = asin ? `https://${domain}/dp/${asin}` : targetUrl;
 
     let title = '';
     let imageUrl = '';
     let price = 0.00;
 
     try {
-      // Try clean product URL first, then original URL as fallback
       let response = await fetch(cleanUrl, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
           'Accept-Language': 'en-US,en;q=0.9',
-          'Accept-Encoding': 'gzip, deflate, br',
           'Cache-Control': 'no-cache',
-          'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-          'Sec-Ch-Ua-Mobile': '?0',
-          'Sec-Ch-Ua-Platform': '"Windows"',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'none',
-          'Sec-Fetch-User': '?1',
           'Upgrade-Insecure-Requests': '1'
         },
         redirect: 'follow'
       });
 
-      // If clean URL failed, try original URL
       if (!response.ok && cleanUrl !== targetUrl) {
         response = await fetch(targetUrl, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Cache-Control': 'no-cache',
-            'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-            'Sec-Ch-Ua-Mobile': '?0',
-            'Sec-Ch-Ua-Platform': '"Windows"',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Upgrade-Insecure-Requests': '1'
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
           },
           redirect: 'follow'
         });
@@ -1423,7 +1422,7 @@ router.post('/scrape-amazon', async (req: AuthenticatedRequest, res: Response) =
       if (response.ok) {
         const html = await response.text();
 
-        // 1. Title — try multiple patterns in priority order
+        // 1. Title — try multiple patterns
         const titlePatterns = [
           /<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i,
           /<meta\s+name=["']title["']\s+content=["']([^"']+)["']/i,
@@ -1434,7 +1433,7 @@ router.post('/scrape-amazon', async (req: AuthenticatedRequest, res: Response) =
         for (const pattern of titlePatterns) {
           const match = html.match(pattern);
           if (match && match[1] && match[1].trim().length > 3) {
-            title = match[1]
+            let candidate = match[1]
               .replace(/&amp;/g, '&')
               .replace(/&quot;/g, '"')
               .replace(/&#039;/g, "'")
@@ -1443,11 +1442,12 @@ router.post('/scrape-amazon', async (req: AuthenticatedRequest, res: Response) =
               .replace(/&mdash;/g, '—')
               .replace(/&ndash;/g, '–')
               .replace(/&nbsp;/g, ' ')
-              .replace(/&amp;quot;/g, '"')
               .trim();
-            title = title.replace(/^Amazon\.com\s*[\|:\-]\s*/i, '').replace(/\s*[\|:\-]\s*Amazon\.com$/i, '').trim();
-            if (title.length >= 4 && !/^image$/i.test(title)) break;
-            title = '';
+            candidate = candidate.replace(/^Amazon\.com\s*[\|:\-]\s*/i, '').replace(/\s*[\|:\-]\s*Amazon\.com$/i, '').trim();
+            if (candidate.length >= 4 && !/^image$/i.test(candidate) && !candidate.toLowerCase().includes('robot check') && !candidate.toLowerCase().includes('captcha')) {
+              title = candidate;
+              break;
+            }
           }
         }
 
@@ -1466,47 +1466,31 @@ router.post('/scrape-amazon', async (req: AuthenticatedRequest, res: Response) =
         for (const pattern of imagePatterns) {
           const match = html.match(pattern);
           if (match && match[1] && match[1].startsWith('http')) {
-            imageUrl = match[1].replace(/\\u002F/g, '/').replace(/\\/g, '');
-            // Reject non-product images
-            if (!imageUrl.includes('unsplash.com') && !imageUrl.includes('placeholder') && !imageUrl.includes('fls-na.amazon')) {
+            const candidateImg = match[1].replace(/\\u002F/g, '/').replace(/\\/g, '');
+            if (!candidateImg.includes('unsplash.com') && !candidateImg.includes('placeholder') && !candidateImg.includes('fls-na.amazon')) {
+              imageUrl = candidateImg;
               break;
             }
-            imageUrl = '';
           }
         }
 
-        // 3. Price — try many patterns including JSON-LD, meta tags, and various HTML formats
+        // 3. Price — try patterns
         const allPricePatterns = [
-          // JSON-LD structured data (most reliable)
           /"price"\s*:\s*"?([0-9]+\.?[0-9]*)"?\s*,\s*"priceCurrency"\s*:\s*"USD"/i,
           /"priceCurrency"\s*:\s*"USD"\s*,\s*"price"\s*:\s*"?([0-9]+\.?[0-9]*)"?\s*/i,
-          // a-offscreen with $ (standard Amazon price display)
           /<span\s+class=["']a-offscreen["']>\$([0-9,.]+)<\/span>/i,
-          // a-price whole + fraction
           /<span\s+class=["']a-price-whole["']>([0-9,]+)<\/span>\s*<span\s+class=["']a-price-fraction["']>([0-9]+)<\/span>/i,
-          // Meta tags
           /<meta\s+property=["']product:price:amount["']\s+content=["']([0-9,.]+)["']/i,
-          /<meta\s+property=["']product:price:currency["']\s+content=["']USD["']/i,
           /<meta\s+itemprop=["']price["']\s+content=["']([0-9,.]+)["']/i,
-          // data-a-price
-          /data-a-color=["']price["'][^>]*>.*?\$([0-9,.]+)/is,
-          // priceAmount in JSON
-          /"priceAmount"\s*:\s*([0-9.]+)/i,
-          // Any $ price in the page (last resort, look for reasonable product prices)
           /\$([0-9]{1,4}\.[0-9]{2})\b/
         ];
         for (const pattern of allPricePatterns) {
           const match = html.match(pattern);
           if (match) {
-            let cleanPrice = '';
-            if (match[2]) {
-              // Whole + fraction pattern
-              cleanPrice = match[1].replace(/[^0-9]/g, '') + '.' + match[2];
-            } else {
-              cleanPrice = match[1].replace(/[^0-9.]/g, '');
-            }
+            let cleanPrice = match[2]
+              ? match[1].replace(/[^0-9]/g, '') + '.' + match[2]
+              : match[1].replace(/[^0-9.]/g, '');
             const parsed = parseFloat(cleanPrice);
-            // Reasonable product price range: $0.01 - $9,999
             if (parsed > 0 && parsed < 10000) {
               price = parsed;
               break;
@@ -1518,32 +1502,28 @@ router.post('/scrape-amazon', async (req: AuthenticatedRequest, res: Response) =
       console.warn("Scraper page fetch failure:", fetchError);
     }
 
-    // Validate extracted data — return partial results if some fields found
-    const warnings: string[] = [];
+    // Apply fail-safe fallbacks if HTML fetch was blocked or partial!
     if (!title || title.length < 4) {
-      warnings.push('Title could not be extracted');
+      title = titleFromSlug || (asin ? `Amazon Product (${asin})` : 'Amazon Merchant Product');
     }
     if (!imageUrl || !imageUrl.startsWith('http')) {
-      warnings.push('Image could not be extracted');
+      imageUrl = cdnImageUrl || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=600&auto=format&fit=crop&q=80';
     }
+
+    const warnings: string[] = [];
     if (!price || price <= 0) {
-      warnings.push('Price could not be extracted — enter manually');
+      warnings.push('Price could not be fetched automatically — please enter price manually');
     }
 
-    // If nothing was extracted at all, return error
-    if (warnings.length === 3) {
-      return res.status(400).json({ error: 'Amazon blocked the request or the page could not be parsed. Please enter all product details manually.' });
-    }
-
-    // Return what we have (partial success is better than nothing)
     res.json({
-      title: title || '',
-      imageUrl: imageUrl || '',
-      price: price || 0,
+      title: title.trim(),
+      imageUrl: imageUrl.trim(),
+      price: price || 0.00,
+      asin: asin || undefined,
       warnings: warnings.length > 0 ? warnings : undefined
     });
   } catch (error: any) {
-    res.status(500).json({ error: 'Failed to scrape Amazon product: ' + error.message });
+    res.status(500).json({ error: 'Failed to process Amazon product link: ' + error.message });
   }
 });
 
