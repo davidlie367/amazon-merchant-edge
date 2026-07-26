@@ -1495,16 +1495,7 @@
         </div>
 
         <form id="createProductForm" class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-          <div class="space-y-1">
-            <label class="font-bold text-gray-500 uppercase text-[9px]">Target Platform</label>
-            <select id="prodPlatform"
-              class="w-full border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-amazon-gold bg-white font-bold text-gray-800">
-              <option value="Amazon" selected>Amazon</option>
-              <option value="Alibaba">Alibaba</option>
-              <option value="Shopify">Shopify</option>
-            </select>
-          </div>
-          <div class="space-y-1">
+          <div class="md:col-span-2 space-y-1">
             <label class="font-bold text-gray-500 uppercase text-[9px]">Product Title</label>
             <input type="text" id="prodTitle" required placeholder="e.g. Wireless Noise Cancelling Earbuds"
               class="w-full border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-amazon-gold" />
@@ -1525,9 +1516,9 @@
             <input type="number" step="any" id="prodPayout" required placeholder="4.00"
               class="w-full border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-amazon-gold" />
           </div>
-          <div class="space-y-1">
-            <label class="font-bold text-gray-500 uppercase text-[9px]">Merchant Link / URL</label>
-            <input type="url" id="prodLink" required placeholder="https://www.amazon.com/..."
+          <div class="md:col-span-2 space-y-1">
+            <label class="font-bold text-gray-500 uppercase text-[9px]">Merchant Link / URL <span class="text-gray-400 font-normal">(Optional)</span></label>
+            <input type="url" id="prodLink" placeholder="https://www.amazon.com/... (Optional)"
               class="w-full border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-amazon-gold" />
           </div>
           <div class="md:col-span-2 pt-4 flex items-center justify-end space-x-3 border-t border-gray-150 mt-2">
@@ -1583,8 +1574,8 @@
           </div>
           <div class="md:col-span-2 space-y-1">
             <label class="font-bold text-gray-500 uppercase text-[9px]">Merchant Product Link <span
-                class="text-red-500 normal-case">(product page URL, NOT the image URL)</span></label>
-            <input type="url" id="editProdLink" required placeholder="https://www.amazon.com/dp/B0..."
+                class="text-gray-400 font-normal">(Optional)</span></label>
+            <input type="url" id="editProdLink" placeholder="https://www.amazon.com/dp/B0... (Optional)"
               class="w-full border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-amazon-gold" />
           </div>
           <div class="md:col-span-2 pt-4 flex items-center justify-end space-x-3 border-t border-gray-150 mt-2">
@@ -3343,11 +3334,13 @@
             </div>
 
             <!-- Card Actions -->
-            <div class="p-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between gap-2">
-              <a href="${p.external_link || '#'}" target="_blank" class="flex-1 inline-flex items-center justify-center space-x-1 py-1.5 bg-gray-100 hover:bg-gray-250 text-gray-700 rounded text-[9px] font-black uppercase tracking-wider transition border border-gray-200">
-                <i data-lucide="external-link" class="h-3 w-3"></i>
-                <span>Open Link</span>
-              </a>
+            <div class="p-3 bg-gray-50 border-t border-gray-100 flex items-center justify-end gap-2">
+              ${(p.external_link && p.external_link.trim() !== '' && p.external_link !== '#') ? `
+                <a href="${p.external_link}" target="_blank" class="flex-1 inline-flex items-center justify-center space-x-1 py-1.5 bg-gray-100 hover:bg-gray-250 text-gray-700 rounded text-[9px] font-black uppercase tracking-wider transition border border-gray-200">
+                  <i data-lucide="external-link" class="h-3 w-3"></i>
+                  <span>Open Link</span>
+                </a>
+              ` : ''}
               <button onclick="openEditProductModal('${p.id}')" class="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg transition cursor-pointer border-0" title="Edit Campaign">
                 <i data-lucide="pencil" class="h-4 w-4"></i>
               </button>
