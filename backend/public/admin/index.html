@@ -2036,6 +2036,8 @@
       if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
         wsProto = 'wss:';
         wsHost = 'amazon-backend-pvqm.onrender.com';
+      } else if (window.location.port === '3000') {
+        wsHost = 'localhost:5000';
       }
 
       const wsUrl = `${wsProto}//${wsHost}?token=${encodeURIComponent(adminToken)}`;
@@ -3845,10 +3847,14 @@
           userRes.json()
         ]);
 
-        currentVipConfig = vipData;
-        allVipProducts = prodData;
-        allUserReviews = reviewsData || [];
-        selectedVipUserPlatform = userData.profile?.platform || null;
+        currentVipConfig = (vipData && typeof vipData === 'object' && !vipData.error) ? vipData : {
+          Amazon: { productIds: [], combos: [] },
+          Alibaba: { productIds: [], combos: [] },
+          Shopify: { productIds: [], combos: [] }
+        };
+        allVipProducts = Array.isArray(prodData) ? prodData : [];
+        allUserReviews = Array.isArray(reviewsData) ? reviewsData : [];
+        selectedVipUserPlatform = (userData && userData.profile) ? userData.profile.platform : null;
 
         // Determine batch status from ACTUAL submissions in CURRENT batch (single source of truth)
         const allPlatforms = ['Amazon', 'Alibaba', 'Shopify'];

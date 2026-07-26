@@ -427,11 +427,13 @@ router.get('/users/:id/reviews', async (req: AuthenticatedRequest, res: Response
       .eq('user_id', id);
 
     if (error) {
-      return res.status(500).json({ error: error.message });
+      console.error('Error fetching user reviews:', error.message);
+      return res.json([]);
     }
     res.json(reviews || []);
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Internal server error' });
+    console.error('Catch error in user reviews lookup:', err);
+    res.json([]);
   }
 });
 
