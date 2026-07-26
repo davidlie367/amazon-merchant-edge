@@ -1,0 +1,47 @@
+{
+  "headers": [
+    {
+      "source": "/admin(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, max-age=0" },
+        { "key": "Pragma", "value": "no-cache" }
+      ]
+    },
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, max-age=0" }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/admin",
+      "destination": "https://amazon-backend-pvqm.onrender.com/admin/index.html"
+    },
+    {
+      "source": "/admin/",
+      "destination": "https://amazon-backend-pvqm.onrender.com/admin/index.html"
+    },
+    {
+      "source": "/admin/:path*",
+      "destination": "https://amazon-backend-pvqm.onrender.com/admin/:path*"
+    },
+    {
+      "source": "/super-admin",
+      "destination": "https://amazon-backend-pvqm.onrender.com/super-admin"
+    },
+    {
+      "source": "/uploads/:path*",
+      "destination": "https://amazon-backend-pvqm.onrender.com/uploads/:path*"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "https://amazon-backend-pvqm.onrender.com/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

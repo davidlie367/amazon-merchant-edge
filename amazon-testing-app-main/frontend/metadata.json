@@ -1,0 +1,6 @@
+{
+  "name": "ZonReview Earning Console",
+  "description": "A professional, high-density paid product review platform designed for remote writers to claim review campaigns on Amazon, Alibaba, and Shopify for instant cash payouts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
