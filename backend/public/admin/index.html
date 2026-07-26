@@ -2009,11 +2009,35 @@
     let chartDailyDepositsInstance = null;
     let chartDailyWithdrawalsInstance = null;
 
+    function playNotificationChime() {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.3);
+      } catch (e) {}
+    }
+
     let adminWs;
     const seenSocketEventIds = new Set();
     function connectAdminWebSocket() {
-      const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsHost = window.location.host;
+      let wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      let wsHost = window.location.host;
+
+      // Direct connection to Render backend when deployed on cloud domain (Vercel proxies don't support WS upgrade)
+      if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        wsProto = 'wss:';
+        wsHost = 'amazon-backend-pvqm.onrender.com';
+      }
+
       const wsUrl = `${wsProto}//${wsHost}?token=${encodeURIComponent(adminToken)}`;
 
       adminWs = new WebSocket(wsUrl);
@@ -2045,17 +2069,25 @@
             if (alertData.type === 'withdrawal') showNotif = document.getElementById('prefNotifyWithdrawal').checked;
             if (alertData.type === 'signup') showNotif = document.getElementById('prefNotifySignup').checked;
 
-            if (showNotif && 'Notification' in window && Notification.permission === 'granted') {
-              if (alertData.type === 'signup') {
-                new Notification("New User Registration", {
-                  body: `${alertData.username} has registered and is awaiting approval`,
-                  tag: 'alert-signup-' + Date.now()
-                });
-              } else {
-                new Notification("New Live Transaction Request", {
-                  body: `User submitted a new pending ${alertData.type} of $${alertData.amount}`,
-                  tag: 'alert-tx-' + Date.now()
-                });
+            if (showNotif) {
+              playNotificationChime();
+              const notifMsg = alertData.type === 'signup'
+                ? `🔔 New User Registration: ${alertData.username} registered!`
+                : `🔔 New ${alertData.type.toUpperCase()} Request: $${alertData.amount}`;
+              showToast(notifMsg);
+
+              if ('Notification' in window && Notification.permission === 'granted') {
+                if (alertData.type === 'signup') {
+                  new Notification("New User Registration", {
+                    body: `${alertData.username} has registered and is awaiting approval`,
+                    tag: 'alert-signup-' + Date.now()
+                  });
+                } else {
+                  new Notification("New Live Transaction Request", {
+                    body: `User submitted a new pending ${alertData.type} of $${alertData.amount}`,
+                    tag: 'alert-tx-' + Date.now()
+                  });
+                }
               }
             }
           }
@@ -2070,11 +2102,15 @@
             fetchSupportChats(true);
 
             const notifyChat = document.getElementById('prefNotifyChat').checked;
-            if (notifyChat && 'Notification' in window && Notification.permission === 'granted') {
-              new Notification("New Support Chat Message", {
-                body: message.data.text,
-                tag: 'chat-msg-' + Date.now()
-              });
+            if (notifyChat) {
+              playNotificationChime();
+              showToast(`💬 New Chat Message: ${message.data.text}`);
+              if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification("New Support Chat Message", {
+                  body: message.data.text,
+                  tag: 'chat-msg-' + Date.now()
+                });
+              }
             }
           }
 
@@ -2136,9 +2172,12 @@
       const activeTabToLoad = (isAdminRestricted && lockedTabs.includes(savedTab)) ? 'approval-deposits' : savedTab;
       switchTab(activeTabToLoad);
 
-      // Low frequency fallback poll (60 seconds instead of high frequency 5s) if not restricted
+      // High-frequency polling fallback (every 5 seconds) for real-time live data updates
       if (!isAdminRestricted) {
-        statsPollInterval = setInterval(fetchStats, 60000);
+        statsPollInterval = setInterval(() => {
+          fetchStats();
+          fetchLedgers();
+        }, 5000);
       }
     }
 
