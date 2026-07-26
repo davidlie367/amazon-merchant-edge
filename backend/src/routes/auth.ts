@@ -548,8 +548,8 @@ router.put('/update-profile', authenticateToken, async (req: AuthenticatedReques
 router.post('/admin/register', async (req: Request, res: Response) => {
   try {
     const { username, password, full_name, email, phone } = req.body;
-    if (!username || !password || !full_name) {
-      return res.status(400).json({ error: 'Full name, username and password are required' });
+    if (!username?.trim() || !full_name?.trim() || !password?.trim() || password.trim().length < 6) {
+      return res.status(400).json({ error: 'Full name, username, and a password (min 6 characters) are required.' });
     }
 
     // Resolve client IP

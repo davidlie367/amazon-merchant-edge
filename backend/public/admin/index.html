@@ -1824,6 +1824,22 @@
       const submitBtn = e.target.querySelector('button[type="submit"]');
       errEl.classList.add('hidden');
 
+      if (!full_name) {
+        errEl.textContent = 'Full Name is required.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!username) {
+        errEl.textContent = 'Username is required.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!password || password.trim().length < 6) {
+        errEl.textContent = 'Password is required and must be at least 6 characters long.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
       // Disable button to prevent double-submit
       if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Submitting...'; }
 
