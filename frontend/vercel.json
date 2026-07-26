@@ -40,7 +40,7 @@
       "destination": "https://amazon-backend-pvqm.onrender.com/api/:path*"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!admin|super-admin|api|uploads).*)",
       "destination": "/index.html"
     }
   ]
