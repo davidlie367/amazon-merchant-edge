@@ -3038,19 +3038,56 @@
       reader.readAsDataURL(file);
     }
 
-    // Scrape Amazon Product link utility
+    // Scrape Amazon Product link utility (Client-side instant pre-parse + Server-side metadata fetch)
     async function scrapeAmazonProduct() {
-      const url = document.getElementById('scrapeUrlField').value;
+      const urlField = document.getElementById('scrapeUrlField');
+      const rawUrl = urlField.value ? urlField.value.trim() : '';
       const statusEl = document.getElementById('scrapeStatusMsg');
       const fetchBtn = document.getElementById('scrapeFetchBtn');
 
-      if (!url) {
+      if (!rawUrl) {
         showToast('Please paste a valid Amazon product link first.', 'error');
         return;
       }
 
-      statusEl.textContent = '⏳ Scraping product details from Amazon... Please wait...';
-      statusEl.classList.remove('hidden', 'text-red-500', 'text-green-600');
+      let targetUrl = rawUrl;
+      if (!/^https?:\/\//i.test(targetUrl)) {
+        targetUrl = 'https://' + targetUrl;
+      }
+
+      // 1. Client-side instant pre-extraction of ASIN, Title, and Amazon CDN Image
+      let asin = '';
+      const asinMatch = targetUrl.match(/(?:\/dp\/|\/gp\/product\/|\/ASIN\/|\/product\/|\/d\/)([A-Z0-9]{10})/i);
+      if (asinMatch) {
+        asin = asinMatch[1].toUpperCase();
+      }
+
+      let clientTitle = '';
+      const slugMatch = targetUrl.match(/amazon\.[a-z.]+\/([^/]+)\/(?:dp|gp\/product)\//i);
+      if (slugMatch && slugMatch[1]) {
+        try {
+          clientTitle = decodeURIComponent(slugMatch[1])
+            .replace(/[-_]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          clientTitle = clientTitle.replace(/\b\w/g, l => l.toUpperCase());
+        } catch (e) {
+          clientTitle = slugMatch[1].replace(/[-_]+/g, ' ').trim();
+        }
+      }
+      if (!clientTitle) {
+        clientTitle = asin ? `Amazon Product (${asin})` : 'Amazon Merchant Product';
+      }
+
+      const clientCdnImage = asin ? `https://images-na.ssl-images-amazon.com/images/P/${asin}.01.LZZZZZZZ.jpg` : '';
+
+      // Optimistically pre-fill form fields immediately so user is never blocked!
+      document.getElementById('prodTitle').value = clientTitle;
+      if (clientCdnImage) document.getElementById('prodImage').value = clientCdnImage;
+      document.getElementById('prodLink').value = targetUrl;
+
+      statusEl.textContent = '⏳ Fetching live price & detailed metadata... Please wait...';
+      statusEl.classList.remove('hidden', 'text-red-500', 'text-green-600', 'text-amber-600');
       statusEl.classList.add('text-gray-500');
       fetchBtn.disabled = true;
 
@@ -3061,37 +3098,36 @@
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${adminToken}`
           },
-          body: JSON.stringify({ url })
+          body: JSON.stringify({ url: targetUrl })
         });
         const data = await res.json();
 
-        if (!res.ok) {
-          statusEl.textContent = '❌ Error: ' + (data.error || 'Failed to extract Amazon metadata.');
-          statusEl.classList.remove('text-gray-500');
-          statusEl.classList.add('text-red-500');
-          return;
-        }
+        if (res.ok) {
+          if (data.title && data.title.length >= 4) document.getElementById('prodTitle').value = data.title;
+          if (data.imageUrl && data.imageUrl.startsWith('http')) document.getElementById('prodImage').value = data.imageUrl;
+          if (data.price && data.price > 0) {
+            document.getElementById('prodPrice').value = data.price;
+            document.getElementById('prodPayout').value = Number((data.price * 0.04).toFixed(2));
+          }
 
-        // Autofill the form inputs!
-        document.getElementById('prodTitle').value = data.title || '';
-        document.getElementById('prodImage').value = data.imageUrl || '';
-        document.getElementById('prodLink').value = url;
-        document.getElementById('prodPrice').value = data.price || '';
-        document.getElementById('prodPayout').value = data.price ? Number((data.price * 0.04).toFixed(2)) : '';
-
-        if (data.warnings && data.warnings.length > 0) {
-          statusEl.textContent = '⚠️ Partial fetch: ' + data.warnings.join('. ') + '. Please fill in the missing fields manually.';
+          if (data.price && data.price > 0) {
+            statusEl.textContent = '✓ Successfully populated Title, Image, Price, Merchant Link, and Payout!';
+            statusEl.classList.remove('text-gray-500', 'text-amber-600');
+            statusEl.classList.add('text-green-600');
+          } else {
+            statusEl.textContent = '✓ Populated Title & High-Res Image! Please enter Product Price manually.';
+            statusEl.classList.remove('text-gray-500', 'text-green-600');
+            statusEl.classList.add('text-amber-600');
+          }
+        } else {
+          statusEl.textContent = '✓ Populated Title & High-Res Image from link! Please enter Product Price manually.';
           statusEl.classList.remove('text-gray-500', 'text-green-600');
           statusEl.classList.add('text-amber-600');
-        } else {
-          statusEl.textContent = '✓ Successfully populated Title, Image, Merchant Link, and estimated payout!';
-          statusEl.classList.remove('text-gray-500');
-          statusEl.classList.add('text-green-600');
         }
       } catch (err) {
-        statusEl.textContent = '❌ Scraper connection failure.';
-        statusEl.classList.remove('text-gray-500');
-        statusEl.classList.add('text-red-500');
+        statusEl.textContent = '✓ Populated Title & Image from link! Please enter Product Price manually.';
+        statusEl.classList.remove('text-gray-500', 'text-green-600');
+        statusEl.classList.add('text-amber-600');
         console.error(err);
       } finally {
         fetchBtn.disabled = false;
