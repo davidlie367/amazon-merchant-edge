@@ -1495,12 +1495,21 @@
         </div>
 
         <form id="createProductForm" class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-          <div class="md:col-span-2 space-y-1">
+          <div class="space-y-1">
+            <label class="font-bold text-gray-500 uppercase text-[9px]">Target Platform</label>
+            <select id="prodPlatform"
+              class="w-full border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-amazon-gold bg-white font-bold text-gray-800">
+              <option value="Amazon" selected>Amazon</option>
+              <option value="Alibaba">Alibaba</option>
+              <option value="Shopify">Shopify</option>
+            </select>
+          </div>
+          <div class="space-y-1">
             <label class="font-bold text-gray-500 uppercase text-[9px]">Product Title</label>
             <input type="text" id="prodTitle" required placeholder="e.g. Wireless Noise Cancelling Earbuds"
               class="w-full border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-amazon-gold" />
           </div>
-          <div class="space-y-1">
+          <div class="md:col-span-2 space-y-1">
             <label class="font-bold text-gray-500 uppercase text-[9px]">Image URL</label>
             <input type="url" id="prodImage" required placeholder="https://images.unsplash.com/..."
               class="w-full border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-amazon-gold" />
@@ -3149,6 +3158,8 @@
       const price = parseFloat(document.getElementById('prodPrice').value) || 0.00;
       const payout = parseFloat(document.getElementById('prodPayout').value);
       const externalLink = document.getElementById('prodLink').value;
+      const platformEl = document.getElementById('prodPlatform');
+      const platform = platformEl ? platformEl.value : 'Amazon';
 
       try {
         const res = await fetch('/api/admin/products', {
@@ -3157,7 +3168,7 @@
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${adminToken}`
           },
-          body: JSON.stringify({ title, imageUrl, price, payout, externalLink })
+          body: JSON.stringify({ title, imageUrl, price, payout, externalLink, platform })
         });
 
         if (res.ok) {

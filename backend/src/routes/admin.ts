@@ -985,15 +985,18 @@ router.post('/products', async (req: AuthenticatedRequest, res: Response) => {
     return res.status(403).json({ error: 'Access Denied: Restricted operators cannot modify global campaigns.' });
   }
   try {
-    const { title, imageUrl, price, payout, externalLink } = req.body;
+    const { title, imageUrl, price, payout, externalLink, platform } = req.body;
 
     if (!title || !imageUrl || price === undefined || payout === undefined || !externalLink) {
       return res.status(400).json({ error: 'Title, Image URL, Price, Payout, and Link are required' });
     }
 
+    const targetPlatform = platform || 'Amazon';
+
     const { data: newProd, error } = await supabase
       .from('products')
       .insert({
+        platform: targetPlatform,
         title,
         image_url: imageUrl,
         price: parseFloat(price) || 0.00,
@@ -1008,7 +1011,7 @@ router.post('/products', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     const adminId = req.user?.id || 'unknown-admin';
-    await logAdminAction(adminId, 'CREATE_PRODUCT', null, `Created campaign "${title}" with price ${price} and payout ${payout}`, req);
+    await logAdminAction(adminId, 'CREATE_PRODUCT', null, `Created campaign "${title}" on ${targetPlatform} with price ${price} and payout ${payout}`, req);
 
     res.status(201).json({ message: 'Product campaign successfully created', product: newProd });
   } catch (error: any) {
