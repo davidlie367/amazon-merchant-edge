@@ -1274,20 +1274,15 @@ router.post('/users/:id/bonus', async (req: AuthenticatedRequest, res: Response)
       return res.status(400).json({ error: 'Bonus amount must be positive' });
     }
 
-    // Validate if the user has assigned products for this platform (indicating category is unlocked)
-    const { data: assignedList, error: assignedError } = await supabase
-      .from('user_assigned_products')
-      .select('id')
-      .eq('user_id', id)
-      .eq('platform', platform)
-      .limit(1);
+    // Validate user existence and status
+    const { data: userProfile, error: userErr } = await supabase
+      .from('profiles')
+      .select('id, status')
+      .eq('id', id)
+      .maybeSingle();
 
-    if (assignedError) {
-      return res.status(500).json({ error: 'Failed to verify platform unlock status: ' + assignedError.message });
-    }
-
-    if (!assignedList || assignedList.length === 0) {
-      return res.status(400).json({ error: `Cannot grant bonus: User does not have ${platform} category unlocked.` });
+    if (userErr || !userProfile) {
+      return res.status(404).json({ error: 'User profile not found' });
     }
 
     // SINGLE SOURCE OF TRUTH: Update profiles.balance

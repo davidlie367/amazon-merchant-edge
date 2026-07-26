@@ -4108,17 +4108,14 @@
 
       // Count how many products are already assigned to this platform (current batch size)
       const currentAssignedCount = assignedProducts.length;
-      // Batch is full when 25 products are assigned — controls locked
+      // Batch is full when 25 products are assigned
       const batchFull = currentAssignedCount >= 25;
-      // Batch is active (locked) when ANY products are assigned — after save, controls are locked
-      const controlsLocked = currentAssignedCount > 0;
 
       const makeProductRow = (p) => {
         // Pre-check ONLY if currently assigned to this specific platform
         const isChecked = p.isAssignedToThisPlatform;
-        // Assigned products are locked when batch exists (any products assigned)
-        // Available products are disabled only when batch is full (25)
-        const isDisabled = (p.isAssignedToThisPlatform && controlsLocked) || (batchFull && !p.isAssignedToThisPlatform);
+        // Available products disabled only if max 25 products limit is reached and this item isn't checked
+        const isDisabled = (batchFull && !p.isAssignedToThisPlatform);
         // Done badge = reviewed specifically on THIS platform
         const claimedBadge = p.isClaimedHere
           ? `<span style="display:inline-flex;align-items:center;background:#dcfce7;color:#15803d;font-size:9px;font-weight:900;padding:2px 6px;border-radius:4px;margin-left:5px;text-transform:uppercase;border:1px solid #86efac;">✓ Done</span>`
@@ -4126,7 +4123,7 @@
         const assignedBadge = !p.isAssignedToThisPlatform && p.otherAssignedPlatforms && p.otherAssignedPlatforms.length > 0
           ? `<span style="display:inline-flex;align-items:center;background:#dbeafe;color:#1d4ed8;font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:5px;text-transform:uppercase;border:1px solid #93c5fd;">📌 ${p.otherAssignedPlatforms.join(', ')}</span>`
           : '';
-        const lockedLabel = p.isAssignedToThisPlatform && controlsLocked && !p.isClaimedHere
+        const lockedLabel = p.isAssignedToThisPlatform && !p.isClaimedHere
           ? `<span style="display:inline-flex;align-items:center;background:#f0f9ff;color:#0369a1;font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:5px;text-transform:uppercase;border:1px solid #bae6fd;">🔒 Assigned</span>`
           : '';
 
@@ -4202,8 +4199,6 @@
       });
     }
 
-
-
     function editVipPagePlatform(platform) {
       unlockVipPagePlatform(platform);
     }
@@ -4220,25 +4215,28 @@
         return updateSelectedPageProductsCount();
       }
 
-      // Color-coded count display
+      // Color-coded count display and Save button toggle
       const countEl = document.getElementById('vipPageConfigSelectedCount');
       const saveBtn = document.getElementById('vipPageSaveBtn');
+
       if (count === 0) {
-        countEl.textContent = `0 products — Save to clear workspace`;
-        countEl.className = 'text-gray-500 font-bold text-[10px]';
-        if (saveBtn) { saveBtn.disabled = false; saveBtn.className = 'bg-amber-500 hover:bg-amber-600 text-white font-black px-6 py-2.5 rounded-lg shadow-sm cursor-pointer transition-colors border-0 text-xs'; }
-      } else if (count === 25) {
-        countEl.textContent = `${count}/25 products — Ready to save`;
-        countEl.className = 'text-green-700 font-black text-[10px]';
-        if (saveBtn) { saveBtn.disabled = false; saveBtn.className = 'bg-green-600 hover:bg-green-700 text-white font-black px-6 py-2.5 rounded-lg shadow-sm cursor-pointer transition-colors border-0 text-xs'; }
-      } else if (count > 20) {
-        countEl.textContent = `${count}/25 products — Select ${25 - count} more`;
-        countEl.className = 'text-amber-600 font-bold text-[10px]';
-        if (saveBtn) { saveBtn.disabled = true; saveBtn.className = 'bg-gray-400 text-gray-200 font-black px-6 py-2.5 rounded-lg shadow-sm cursor-not-allowed border-0 text-xs'; }
+        if (countEl) {
+          countEl.textContent = `0 products — Save to clear workspace`;
+          countEl.className = 'text-gray-500 font-bold text-[10px]';
+        }
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.className = 'bg-amber-500 hover:bg-amber-600 text-white font-black px-6 py-2.5 rounded-lg shadow-sm cursor-pointer transition-colors border-0 text-xs';
+        }
       } else {
-        countEl.textContent = `${count}/25 products — Select ${25 - count} more`;
-        countEl.className = 'text-gray-500 font-bold text-[10px]';
-        if (saveBtn) { saveBtn.disabled = true; saveBtn.className = 'bg-gray-400 text-gray-200 font-black px-6 py-2.5 rounded-lg shadow-sm cursor-not-allowed border-0 text-xs'; }
+        if (countEl) {
+          countEl.textContent = `${count}/25 products selected — Ready to save`;
+          countEl.className = 'text-green-700 font-black text-[10px]';
+        }
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.className = 'bg-green-600 hover:bg-green-700 text-white font-black px-6 py-2.5 rounded-lg shadow-sm cursor-pointer transition-colors border-0 text-xs';
+        }
       }
 
       // Show/hide the limit banner (only show when over 25, which shouldn't happen due to enforcement above)
