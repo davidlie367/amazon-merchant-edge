@@ -77,12 +77,7 @@ const allowedOrigins = process.env.FRONTEND_URL
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow same-origin, allowed origins list, or Render backend domains
-    if (!origin || allowedOrigins.includes(origin) || origin.includes('onrender.com')) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
+    callback(null, true);
   },
   credentials: true
 }));
@@ -96,10 +91,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 app.get(['/admin', '/admin/index.html'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.join(__dirname, '../public/admin/index.html'));
 });
-app.use('/admin', express.static(path.join(__dirname, '../public/admin')));
+app.use('/admin', express.static(path.join(__dirname, '../public/admin'), {
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  }
+}));
 app.get('/super-admin', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
   res.sendFile(path.join(__dirname, '../public/super.html'));
 });
 app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
