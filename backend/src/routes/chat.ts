@@ -1,5 +1,5 @@
 import express, { Response } from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabase, isDbConfigured } from '../config/supabase.js';
 import { authenticateToken, AuthenticatedRequest } from '../middlewares/auth.js';
 import fs from 'fs';
 import path from 'path';
@@ -12,9 +12,6 @@ const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const isDbConfigured = process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('your-project-id') &&
-                       process.env.SUPABASE_KEY && !process.env.SUPABASE_KEY.includes('your-supabase-anon-key');
-
 // 1. Fetch Chat Message Log
 router.get('/history', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -24,7 +21,7 @@ router.get('/history', authenticateToken, async (req: AuthenticatedRequest, res:
     const welcomeMsgText = 'Hello! Welcome to the Client Support Desk. How can we assist you with balance updates, withdrawals, or review submissions today?';
     const welcomeTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    if (!isDbConfigured) {
+    if (!isDbConfigured()) {
       const userThreads = mockChatMessages.filter(m => m.user_id === (userId || 'user-dev-uuid'));
       if (userThreads.length === 0) {
         mockChatMessages.push({
@@ -92,7 +89,7 @@ router.post('/send', authenticateToken, async (req: AuthenticatedRequest, res: R
     const timeVal = time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const autoReplyText = "Your support request has been queued. An operator has been notified and will audit your inquiry shortly.";
 
-    if (!isDbConfigured) {
+    if (!isDbConfigured()) {
       const userMsg = {
         id: `msg-user-${Date.now()}`,
         user_id: userId || 'user-dev-uuid',
@@ -214,7 +211,7 @@ router.post('/upload', authenticateToken, async (req: AuthenticatedRequest, res:
     const filename = `chat_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${imageExtension}`;
     const mimeType = `image/${imageExtension === 'jpg' ? 'jpeg' : imageExtension}`;
 
-    if (isDbConfigured) {
+    if (isDbConfigured()) {
       // Try to upload to Supabase Storage Bucket 'chat-attachments' first
       const { error: uploadError } = await supabase.storage
         .from('chat-attachments')

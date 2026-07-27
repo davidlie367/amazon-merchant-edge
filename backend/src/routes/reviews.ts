@@ -1,7 +1,8 @@
 import express, { Response } from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabase, isDbConfigured } from '../config/supabase.js';
 import { authenticateToken, AuthenticatedRequest } from '../middlewares/auth.js';
 import { broadcastToUser, broadcastToAdmins } from '../services/wsService.js';
+import { mockProfiles, mockPlatformBalances, mockProducts, mockUserAssignedProducts, mockComboCheckpoints, mockDeposits, mockReviewSubmissions, ReviewSubmission, ensureDefaultProducts } from '../config/sandboxStore.js';
 
 const router = express.Router();
 
@@ -84,12 +85,27 @@ router.get('/products', authenticateToken, async (req: AuthenticatedRequest, res
 
     const userId = req.user?.id;
 
+    if (!isDbConfigured()) {
+      ensureDefaultProducts();
+      const assigned = mockUserAssignedProducts
+        .filter(a => a.user_id === userId && a.platform === platform)
+        .sort((a, b) => a.position - b.position);
+
+      if (assigned.length === 0) return res.json([]);
+      const sortedProds = assigned.map(a => {
+        const prod = mockProducts.find(p => p.id === a.product_id);
+        return prod ? { ...prod, position: a.position, assignedAt: a.created_at } : null;
+      }).filter(Boolean);
+      return res.json(sortedProds);
+    }
+
     // Check if user has specific assigned products for this platform
     const { data: assigned } = await supabase
       .from('user_assigned_products')
-      .select('product_id, created_at')
+      .select('product_id, position, created_at')
       .eq('user_id', userId)
-      .eq('platform', platform);
+      .eq('platform', platform)
+      .order('position', { ascending: true });
 
     if (!assigned || assigned.length === 0) {
       // If no products assigned, this platform is locked/unassigned for this user
@@ -102,73 +118,25 @@ router.get('/products', authenticateToken, async (req: AuthenticatedRequest, res
       .select('*')
       .in('id', assignedIds);
 
-    const assignedMap = new Map(assigned.map((a: any) => [a.product_id, a.created_at]));
-    if (products) {
-      products = products.map((p: any) => ({
-        ...p,
-        assignedAt: assignedMap.get(p.id) || new Date().toISOString()
-      }));
-    }
-
     if (error) {
       return res.status(500).json({ error: 'Failed to retrieve products: ' + error.message });
     }
 
-    // Auto-seed product pool if database is completely empty
-    if (!products || products.length === 0) {
-      const { count } = await supabase.from('products').select('*', { count: 'exact', head: true });
-      if (count === 0) {
-        const defaultProducts = [
-          // Amazon (4% Commission)
-          { title: 'ZonHub Smart Echo (5th Gen) | Spatial sound', image_url: 'https://images.unsplash.com/photo-1543512214-318c7553f230?auto=format&fit=crop&q=80&w=600', price: 31.25, payout: 1.25, external_link: 'https://www.amazon.com/s?k=smart+echo+speaker' },
-          { title: 'ZonReader Paperwhite (16 GB) | Warm light', image_url: 'https://images.unsplash.com/photo-1544244015-0df4b3ffc6b0?auto=format&fit=crop&q=80&w=600', price: 48.75, payout: 1.95, external_link: 'https://www.amazon.com/s?k=paperwhite+ereader' },
-          { title: 'Organic Bamboo Coasters Set (6-Pack) | Non-slip', image_url: 'https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?auto=format&fit=crop&q=80&w=600', price: 20.00, payout: 0.80, external_link: 'https://www.amazon.com/s?k=bamboo+coasters' },
-          { title: 'Ergonomic Memory Foam Office Seat Cushion', image_url: 'https://images.unsplash.com/photo-1505797149-43b0069ec26b?auto=format&fit=crop&q=80&w=600', price: 27.50, payout: 1.10, external_link: 'https://www.amazon.com/s?k=office+seat+cushion' },
-          { title: 'Stainless Steel Vacuum Insulated Water Bottle (32oz)', image_url: 'https://images.unsplash.com/photo-1602143407151-7111542de6e8?auto=format&fit=crop&q=80&w=600', price: 35.00, payout: 1.40, external_link: 'https://www.amazon.com/s?k=insulated+water+bottle' },
-          { title: 'Professional Ceramic Ionic Hair Dryer | 1875W', image_url: 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&q=80&w=600', price: 55.00, payout: 2.20, external_link: 'https://www.amazon.com/s?k=hair+dryer' },
-          { title: 'Adjustable Laptop Stand | Ergonomic Aluminum Stand', image_url: 'https://images.unsplash.com/photo-1527443224154-c4a3942d3acf?auto=format&fit=crop&q=80&w=600', price: 41.25, payout: 1.65, external_link: 'https://www.amazon.com/s?k=laptop+stand' },
-          { title: 'Premium Matcha Green Tea Powder (Organic)', image_url: 'https://images.unsplash.com/photo-1536256263959-770b48d82b0a?auto=format&fit=crop&q=80&w=600', price: 23.75, payout: 0.95, external_link: 'https://www.amazon.com/s?k=matcha+powder' },
-          { title: 'Dual-Port USB-C Wall Charger Block | 40W Fast Charger', image_url: 'https://images.unsplash.com/photo-1583863788434-e58a36330cf0?auto=format&fit=crop&q=80&w=600', price: 26.25, payout: 1.05, external_link: 'https://www.amazon.com/s?k=usb+c+charger' },
-          { title: 'Wireless Active Noise Cancelling Earbuds | Bluetooth 5.3', image_url: 'https://images.unsplash.com/photo-1590658268037-6bf12165a8df?auto=format&fit=crop&q=80&w=600', price: 52.50, payout: 2.10, external_link: 'https://www.amazon.com/s?k=noise+cancelling+earbuds' },
-          { title: 'Digital Kitchen Scale | High Precision Multi-unit', image_url: 'https://images.unsplash.com/photo-1588675646184-f550218b57b5?auto=format&fit=crop&q=80&w=600', price: 18.75, payout: 0.75, external_link: 'https://www.amazon.com/s?k=kitchen+scale' },
-          { title: 'Aromatherapy Ceramic Essential Oil Diffuser (500ml)', image_url: 'https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?auto=format&fit=crop&q=80&w=600', price: 32.50, payout: 1.30, external_link: 'https://www.amazon.com/s?k=essential+oil+diffuser' },
-          // Alibaba (8% Commission)
-          { title: 'AliUltra Foldable Electric Scooter | Dual motor', image_url: 'https://images.unsplash.com/photo-1558002038-1055907df827?auto=format&fit=crop&q=80&w=600', price: 31.25, payout: 2.50, external_link: 'https://www.alibaba.com/trade/search?SearchText=electric+scooter' },
-          { title: 'AliVision 4K Native LED Projector | 15k Lms', image_url: 'https://images.unsplash.com/photo-1535016120720-40c646be5580?auto=format&fit=crop&q=80&w=600', price: 26.87, payout: 2.15, external_link: 'https://www.alibaba.com/trade/search?SearchText=4k+projector' },
-          { title: 'AliSecure HD Outdoor IP Camera | Wifi PTZ Node', image_url: 'https://images.unsplash.com/photo-1557597774-9d273605dfa9?auto=format&fit=crop&q=80&w=600', price: 22.50, payout: 1.80, external_link: 'https://www.alibaba.com/trade/search?SearchText=wifi+ip+camera' },
-          { title: 'Smart Automated Robot Vacuum Cleaner | LIDAR Map', image_url: 'https://images.unsplash.com/photo-1518640467707-6811f4a6ab73?auto=format&fit=crop&q=80&w=600', price: 30.00, payout: 2.40, external_link: 'https://www.alibaba.com/trade/search?SearchText=robot+vacuum' },
-          { title: 'Portable Solar Generator Station | 500Wh Output', image_url: 'https://images.unsplash.com/photo-1509391366360-2e959784a276?auto=format&fit=crop&q=80&w=600', price: 28.75, payout: 2.30, external_link: 'https://www.alibaba.com/trade/search?SearchText=portable+solar+generator' },
-          { title: 'Heavy Duty Massage Gun | 30 Speeds Deep Tissue', image_url: 'https://images.unsplash.com/photo-1607962837359-5e7eaf562642?auto=format&fit=crop&q=80&w=600', price: 20.00, payout: 1.60, external_link: 'https://www.alibaba.com/trade/search?SearchText=massage+gun' },
-          { title: 'Adjustable Dumbbells Set (50lbs) | Quick Dial', image_url: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?auto=format&fit=crop&q=80&w=600', price: 28.12, payout: 2.25, external_link: 'https://www.alibaba.com/trade/search?SearchText=adjustable+dumbbells' },
-          { title: 'Automatic Espresso Coffee Machine | 20 Bar Pump', image_url: 'https://images.unsplash.com/photo-1517701550927-30cf4ba1dba5?auto=format&fit=crop&q=80&w=600', price: 30.62, payout: 2.45, external_link: 'https://www.alibaba.com/trade/search?SearchText=espresso+machine' },
-          { title: 'Electric Oral Irrigator Dental Flosser | 4 Modes', image_url: 'https://images.unsplash.com/photo-1607613009820-a29f7bb81c04?auto=format&fit=crop&q=80&w=600', price: 11.87, payout: 0.95, external_link: 'https://www.alibaba.com/trade/search?SearchText=oral+irrigator' },
-          { title: 'Portable Bluetooth Thermal Label Printer', image_url: 'https://images.unsplash.com/photo-1543269664-76bc3997d9ea?auto=format&fit=crop&q=80&w=600', price: 15.00, payout: 1.20, external_link: 'https://www.alibaba.com/trade/search?SearchText=label+printer' },
-          { title: 'Dual Layer Car Roof Cargo Carrier Bag | Waterproof', image_url: 'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?auto=format&fit=crop&q=80&w=600', price: 18.75, payout: 1.50, external_link: 'https://www.alibaba.com/trade/search?SearchText=roof+cargo+bag' },
-          { title: 'Foldable Lightbox Photography Studio Kit', image_url: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&q=80&w=600', price: 18.12, payout: 1.45, external_link: 'https://www.alibaba.com/trade/search?SearchText=lightbox+studio' },
-          // Shopify (12% Commission)
-          { title: 'Minimalist Full-Grain Leather Wallet | RFID organizer', image_url: 'https://images.unsplash.com/photo-1627123424574-724758594e93?auto=format&fit=crop&q=80&w=600', price: 11.00, payout: 1.32, external_link: 'https://www.google.com/search?q=minimalist+leather+wallet' },
-          { title: 'Therapeutic Essential Oils Diffuser | Ceramic ultrasonic', image_url: 'https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?auto=format&fit=crop&q=80&w=600', price: 9.00, payout: 1.08, external_link: 'https://www.google.com/search?q=ceramic+essential+oils+diffuser' },
-          { title: 'Eco-Friendly Cork Yoga Mat | Non-slip sweat-resistant', image_url: 'https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?auto=format&fit=crop&q=80&w=600', price: 17.00, payout: 2.04, external_link: 'https://www.google.com/search?q=cork+yoga+mat' },
-          { title: 'Hydro Flask Insulated Travel Coffee Mug | 16oz Wide Mouth', image_url: 'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?auto=format&fit=crop&q=80&w=600', price: 12.00, payout: 1.44, external_link: 'https://www.google.com/search?q=insulated+travel+mug' },
-          { title: 'Premium Bamboo Bed Sheets Set | King Size Cooling', image_url: 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&q=80&w=600', price: 23.50, payout: 2.82, external_link: 'https://www.google.com/search?q=bamboo+bed+sheets' },
-          { title: 'Minimalist Wooden Desk Organizer Stand | Handcrafted Walnut', image_url: 'https://images.unsplash.com/photo-1513151233558-d860c5398176?auto=format&fit=crop&q=80&w=600', price: 15.00, payout: 1.80, external_link: 'https://www.google.com/search?q=wooden+desk+organizer' },
-          { title: 'Aromatherapy Soy Wax Candles Set | Lavender & Eucalyptus', image_url: 'https://images.unsplash.com/photo-1603006905003-be475563bc59?auto=format&fit=crop&q=80&w=600', price: 8.50, payout: 1.02, external_link: 'https://www.google.com/search?q=soy+wax+candles' },
-          { title: 'Polarized Retro Round Sunglasses | UV400 Unbreakable', image_url: 'https://images.unsplash.com/photo-1511499767150-a48a237f0083?auto=format&fit=crop&q=80&w=600', price: 13.00, payout: 1.56, external_link: 'https://www.google.com/search?q=polarized+round+sunglasses' },
-          { title: 'Manual Ceramic Burr Coffee Grinder | Adjustable Coarseness', image_url: 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&q=80&w=600', price: 14.50, payout: 1.74, external_link: 'https://www.google.com/search?q=manual+coffee+grinder' },
-          { title: 'Stainless Steel French Press Coffee Maker | Double Wall', image_url: 'https://images.unsplash.com/photo-1544787219-7f47ccb76574?auto=format&fit=crop&q=80&w=600', price: 19.00, payout: 2.28, external_link: 'https://www.google.com/search?q=french+press+coffee+maker' },
-          { title: 'Vegan Leather Minimalist Backpack | 15.6 Inch Laptop Sleeve', image_url: 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?auto=format&fit=crop&q=80&w=600', price: 21.00, payout: 2.52, external_link: 'https://www.google.com/search?q=vegan+leather+backpack' },
-          { title: 'Ergonomic Balance Ball Chair with Stability Base', image_url: 'https://images.unsplash.com/photo-1592078615290-033ee584e267?auto=format&fit=crop&q=80&w=600', price: 22.50, payout: 2.70, external_link: 'https://www.google.com/search?q=balance+ball+chair' }
-        ];
+    // Sort products by exact position (1 to 25) assigned by Admin
+    const productMap = new Map((products || []).map((p: any) => [p.id, p]));
+    const sortedProducts = assigned
+      .map((a: any, idx: number) => {
+        const prod = productMap.get(a.product_id);
+        if (!prod) return null;
+        return {
+          ...prod,
+          position: a.position || (idx + 1),
+          assignedAt: a.created_at || new Date().toISOString()
+        };
+      })
+      .filter(Boolean);
 
-        const { error: seedError } = await supabase.from('products').insert(defaultProducts);
-        if (!seedError) {
-          const { data: refetched } = await supabase.from('products').select('*').in('id', assignedIds);
-          products = refetched;
-        }
-      }
-    }
-
-    res.json(products || []);
+    res.json(sortedProducts);
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
@@ -196,15 +164,93 @@ router.post('/submit', authenticateToken, async (req: AuthenticatedRequest, res:
 
     const finalOrderId = orderId || ('ORD-' + Math.random().toString(36).substring(2, 12).toUpperCase());
 
-    const isDbConfigured = process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('your-project-id') &&
-                           process.env.SUPABASE_KEY && !process.env.SUPABASE_KEY.includes('your-supabase-anon-key');
+    // Dev sandbox mode
+    if (!isDbConfigured()) {
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+      ensureDefaultProducts();
+      const assignment = mockUserAssignedProducts.find(a => a.user_id === userId && a.product_id === productId);
+      if (!assignment) {
+        return res.status(400).json({ error: 'This campaign product is not assigned to your active workspace.' });
+      }
+      const platform = assignment.platform;
+      const product = mockProducts.find(p => p.id === productId);
+      const payoutEarned = product ? product.payout : 1.00;
 
-    // Dev sandbox mode — no DB calls at all
-    if (userId === 'user-dev-uuid' || userId === 'admin-dev-uuid' || !isDbConfigured) {
+      let bal = mockPlatformBalances.find(b => b.user_id === userId && b.platform === platform);
+      if (!bal) {
+        bal = { id: `bal-${userId}-${platform}`, user_id: userId, platform, wallet_balance: 0, reviews_count: 0, current_position: 0, last_reset_at: new Date().toISOString() };
+        mockPlatformBalances.push(bal);
+      }
+      const activeBal = bal;
+
+      let profile = mockProfiles.find(u => u.id === userId);
+      if (!profile) {
+        profile = { id: userId, username: 'testuser', password: 'password', country: 'Unknown', city: 'Unknown', ip_address: '127.0.0.1', status: 'active', referral_code: 'REF123', balance: 0.00, created_at: new Date().toISOString() };
+        mockProfiles.push(profile);
+      }
+
+      const currentPos = activeBal.current_position || 0;
+      if (currentPos >= 25) {
+        return res.status(400).json({ error: 'All 25 orders completed. Wait for admin to assign new orders.', batchComplete: true });
+      }
+
+      const nextPos = currentPos + 1;
+      const checkpoint = mockComboCheckpoints.find(c => c.user_id === userId && c.platform === platform && c.position === nextPos);
+      const batchStart = activeBal.last_reset_at || new Date(0).toISOString();
+
+      if (checkpoint) {
+        const cumulativeRequired = mockComboCheckpoints
+          .filter(c => c.user_id === userId && c.platform === platform && c.position <= nextPos)
+          .reduce((sum, cp) => sum + cp.trigger_balance, 0);
+
+        const totalApprovedDeposits = mockDeposits
+          .filter(d => d.user_id === userId && d.platform === platform && d.status === 'Approved' && new Date(d.created_at).getTime() >= new Date(batchStart).getTime())
+          .reduce((sum, d) => sum + d.amount, 0);
+
+        if (totalApprovedDeposits < cumulativeRequired) {
+          const remainingAmount = Number((cumulativeRequired - totalApprovedDeposits).toFixed(2));
+          return res.status(403).json({
+            error: 'COMBO_BLOCK',
+            triggerBalance: checkpoint.trigger_balance,
+            profitAmount: checkpoint.profit_override,
+            currentBalance: profile.balance,
+            position: nextPos,
+            depositedAmount: totalApprovedDeposits,
+            requiredAmount: cumulativeRequired,
+            remainingAmount: remainingAmount
+          });
+        }
+      }
+
+      const newBalance = Number(((profile.balance || 0) + payoutEarned).toFixed(2));
+      profile.balance = newBalance;
+      activeBal.current_position = nextPos;
+      activeBal.reviews_count = (activeBal.reviews_count || 0) + 1;
+
+      const submission: ReviewSubmission = {
+        id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        user_id: userId,
+        product_id: productId,
+        order_id: finalOrderId,
+        review_text: reviewText,
+        status: 'Completed',
+        payout_earned: payoutEarned,
+        platform,
+        created_at: new Date().toISOString()
+      };
+      mockReviewSubmissions.push(submission);
+
       return res.status(201).json({
-        message: 'Review draft successfully recorded and approved (Sandbox Mode).',
-        submission: { id: 'submission-dev-uuid', user_id: userId, product_id: productId, order_id: finalOrderId, review_text: reviewText, payout_earned: 1.00, status: 'Completed' },
-        payoutEarned: 1.00, completedReviewsCount: 1
+        message: 'Review successfully submitted and commission credited to your account.',
+        submission,
+        isCombo: !!checkpoint,
+        checkpointAmount: checkpoint ? checkpoint.trigger_balance : 0,
+        profitBonus: checkpoint ? checkpoint.profit_override : 0,
+        payoutEarned,
+        completedReviewsCount: nextPos,
+        walletBalance: newBalance,
+        nextComboBlocked: false,
+        nextComboDetails: null
       });
     }
 
@@ -250,18 +296,6 @@ router.post('/submit', authenticateToken, async (req: AuthenticatedRequest, res:
     const batchStart = bal.last_reset_at ? new Date(bal.last_reset_at).toISOString() : new Date(0).toISOString();
 
     // ========== PHASE 2: Business rule checks ==========
-    // Cooldown
-    if (bal.last_completed_batch_at) {
-      const hoursElapsed = (Date.now() - new Date(bal.last_completed_batch_at).getTime()) / (1000 * 60 * 60);
-      if (hoursElapsed < 24) {
-        const hoursLeft = Math.max(0, Math.ceil(24 - hoursElapsed));
-        const minutesLeft = Math.max(0, Math.ceil((24 - hoursElapsed) * 60) % 60);
-        return res.status(400).json({ error: `Your withdrawal has been processed. You can start the next batch in ${hoursLeft}h ${minutesLeft}m.`, cooldownActive: true, hoursRemaining: hoursLeft, minutesRemaining: minutesLeft });
-      } else {
-        supabase.from('platform_balances').update({ last_completed_batch_at: null, last_reset_at: new Date().toISOString() }).eq('user_id', userId).eq('platform', platform);
-        bal.last_completed_batch_at = null;
-      }
-    }
 
     // 25 order limit
     if (currentPos >= 25) {
@@ -362,13 +396,23 @@ router.post('/submit', authenticateToken, async (req: AuthenticatedRequest, res:
       .from('combo_checkpoints').select('*').eq('user_id', userId).eq('platform', platform).eq('position', nextCampaignPos).maybeSingle();
 
     if (nextCheckpoint) {
-      const [{ count: reqD }, { count: actD }] = await Promise.all([
-        supabase.from('combo_checkpoints').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('platform', platform).lte('position', nextCampaignPos),
-        supabase.from('deposits').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('platform', platform).eq('status', 'Approved').gte('amount', nextCheckpoint.trigger_balance).gte('created_at', batchStart)
+      const [{ data: allCPs }, { data: appDeps }] = await Promise.all([
+        supabase.from('combo_checkpoints').select('trigger_balance').eq('user_id', userId).eq('platform', platform).lte('position', nextCampaignPos),
+        supabase.from('deposits').select('amount').eq('user_id', userId).eq('platform', platform).eq('status', 'Approved').gte('created_at', batchStart)
       ]);
-      nextComboBlocked = (actD || 0) < (reqD || 0);
+      const cumReq = (allCPs || []).reduce((s: number, cp: any) => s + (parseFloat(cp.trigger_balance as any) || 0), 0);
+      const totApp = (appDeps || []).reduce((s: number, d: any) => s + (parseFloat(d.amount as any) || 0), 0);
+      nextComboBlocked = totApp < cumReq;
       if (nextComboBlocked) {
-        nextComboDetails = { position: nextCampaignPos, triggerBalance: parseFloat(nextCheckpoint.trigger_balance as any) || 0.00, profitAmount: parseFloat(nextCheckpoint.profit_override as any) || 0.00, currentBalance: newBalance };
+        const rem = Math.max(0, Number((cumReq - totApp).toFixed(2)));
+        nextComboDetails = {
+          position: nextCampaignPos,
+          triggerBalance: parseFloat(nextCheckpoint.trigger_balance as any) || 0.00,
+          profitAmount: parseFloat(nextCheckpoint.profit_override as any) || 0.00,
+          depositedAmount: totApp,
+          remainingAmount: rem > 0 ? rem : (parseFloat(nextCheckpoint.trigger_balance as any) || 0.00),
+          currentBalance: newBalance
+        };
       }
     }
 
@@ -419,7 +463,6 @@ router.get('/submissions', authenticateToken, async (req: AuthenticatedRequest, 
         review_text,
         status,
         payout_earned,
-        platform,
         created_at,
         product:products (
           title,
@@ -432,25 +475,42 @@ router.get('/submissions', authenticateToken, async (req: AuthenticatedRequest, 
       return res.status(500).json({ error: 'Failed to fetch submissions: ' + error.message });
     }
 
+    // Fetch assigned products mapping to infer platform if sub.platform is null
+    const { data: assignedProducts } = await supabase
+      .from('user_assigned_products')
+      .select('product_id, platform')
+      .eq('user_id', userId);
+
+    const productPlatformMap: Record<string, string> = {};
+    if (assignedProducts) {
+      for (const a of assignedProducts) {
+        productPlatformMap[a.product_id] = a.platform;
+      }
+    }
+
     // Filter submissions to current batch only (created at or after last_reset_at)
     const formattedSubmissions = (submissions || [])
       .filter((sub: any) => {
-        const batchStart = batchStartMap[sub.platform] || new Date(0).toISOString();
+        const plat = sub.platform || productPlatformMap[sub.product_id] || 'Amazon';
+        const batchStart = batchStartMap[plat] || new Date(0).toISOString();
         return new Date(sub.created_at).getTime() >= new Date(batchStart).getTime();
       })
-      .map((sub: any) => ({
-        id: sub.id,
-        productId: sub.product_id,
-        productTitle: sub.product?.title || 'Unknown Product',
-        productImage: sub.product?.image_url || '',
-        platform: sub.platform || '',
-        orderId: sub.order_id,
-        reviewText: sub.review_text,
-        payout: parseFloat(sub.payout_earned) || 0.00,
-        status: sub.status,
-        createdAt: sub.created_at,
-        date: new Date(sub.created_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
-      }));
+      .map((sub: any) => {
+        const plat = sub.platform || productPlatformMap[sub.product_id] || 'Amazon';
+        return {
+          id: sub.id,
+          productId: sub.product_id,
+          productTitle: sub.product?.title || 'Unknown Product',
+          productImage: sub.product?.image_url || '',
+          platform: plat,
+          orderId: sub.order_id,
+          reviewText: sub.review_text,
+          payout: parseFloat(sub.payout_earned) || 0.00,
+          status: sub.status,
+          createdAt: sub.created_at,
+          date: new Date(sub.created_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
+        };
+      });
 
     res.json(formattedSubmissions);
   } catch (error: any) {

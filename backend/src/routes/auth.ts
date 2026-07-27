@@ -2,9 +2,10 @@ import express, { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import bcryptjs from 'bcryptjs';
 import axios from 'axios';
-import { supabase } from '../config/supabase.js';
+import { supabase, isDbConfigured } from '../config/supabase.js';
 import { authenticateToken, AuthenticatedRequest, requireSuperAdmin } from '../middlewares/auth.js';
 import { clearCache } from '../services/cacheService.js';
+import { mockProfiles, mockAdmins, AdminUser, mockPlatformBalances, mockComboCheckpoints, mockDeposits, mockReviewSubmissions, mockUserAssignedProducts, mockProducts, Profile, ensureDefaultProducts } from '../config/sandboxStore.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'ecommerce_Vine_secret_hash_2026_secured';
@@ -80,16 +81,58 @@ router.post('/register', async (req: Request, res: Response) => {
 
     let referrerCodeToSave = null;
     if (normalizedReferralCode) {
-      const { data: referrer, error: referralError } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('referral_code', normalizedReferralCode)
-        .maybeSingle();
+      if (isDbConfigured()) {
+        const { data: referrer, error: referralError } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('referral_code', normalizedReferralCode)
+          .maybeSingle();
 
-      if (referralError || !referrer) {
-        return res.status(400).json({ error: 'Invalid referral code' });
+        if (referralError || !referrer) {
+          return res.status(400).json({ error: 'Invalid referral code' });
+        }
       }
       referrerCodeToSave = normalizedReferralCode;
+    }
+
+    if (!isDbConfigured()) {
+      const existing = mockProfiles.find(u => u.username.toLowerCase() === username.trim().toLowerCase());
+      if (existing) {
+        return res.status(400).json({ error: 'Username already exists' });
+      }
+      const referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+      const mockUser: Profile = {
+        id: `user-${Date.now()}`,
+        username: username.trim(),
+        email: email ? email.trim() : null,
+        password,
+        withdrawal_password: withdrawalPassword || null,
+        country: 'Unknown',
+        city: 'Unknown',
+        ip_address: '127.0.0.1',
+        status: 'pending',
+        referral_code: referralCode,
+        referred_by: referrerCodeToSave,
+        balance: 0.00,
+        created_at: new Date().toISOString()
+      };
+      mockProfiles.push(mockUser);
+      ['Amazon', 'Alibaba', 'Shopify'].forEach(plat => {
+        mockPlatformBalances.push({
+          id: `bal-${mockUser.id}-${plat}`,
+          user_id: mockUser.id,
+          platform: plat,
+          wallet_balance: 0.00,
+          reviews_count: 0,
+          current_position: 0,
+          last_reset_at: new Date().toISOString()
+        });
+      });
+      return res.status(201).json({
+        message: 'Account successfully registered and queued for approval.',
+        status: mockUser.status,
+        username: mockUser.username
+      });
     }
 
     // Check if user already exists
@@ -228,12 +271,26 @@ router.post('/login', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
-    // Verify Supabase database credentials exist before querying
-    const isDbConfigured = process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('your-project-id') &&
-                           process.env.SUPABASE_KEY && !process.env.SUPABASE_KEY.includes('your-supabase-anon-key');
-
-    if (!isDbConfigured) {
-      return res.status(503).json({ error: 'Database not configured. Please contact the system administrator.' });
+    if (!isDbConfigured()) {
+      const user = mockProfiles.find(u => u.username.toLowerCase() === username.trim().toLowerCase());
+      if (!user || user.password !== password) {
+        return res.status(401).json({ error: 'Invalid username or password' });
+      }
+      if (user.status === 'restricted') {
+        return res.status(403).json({ error: 'Account has been restricted. Please contact customer service.' });
+      }
+      const token = jwt.sign({ id: user.id, username: user.username, role: 'user' }, JWT_SECRET, { expiresIn: '7d' });
+      return res.json({
+        token,
+        user: {
+          id: user.id,
+          username: user.username,
+          role: 'user',
+          status: user.status,
+          referralCode: user.referral_code,
+          profile_photo: user.profile_photo || null
+        }
+      });
     }
 
     // Fetch user details from Supabase database
@@ -293,10 +350,78 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
-// 3. User Details Endpoint
 router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    if (!isDbConfigured()) {
+      const profile = mockProfiles.find(u => u.id === userId);
+      if (!profile) {
+        return res.status(404).json({ error: 'Active reviewer profile not found.' });
+      }
+      ensureDefaultProducts();
+      const userPlatform = profile.platform || 'Amazon';
+      let progressRow = mockPlatformBalances.find(b => b.user_id === userId && b.platform === userPlatform);
+      if (!progressRow) {
+        progressRow = {
+          id: `bal-${userId}-${userPlatform}`,
+          user_id: userId,
+          platform: userPlatform,
+          wallet_balance: 0,
+          reviews_count: 0,
+          current_position: 0,
+          last_reset_at: new Date().toISOString()
+        };
+        mockPlatformBalances.push(progressRow);
+      }
+      const activeProgress = progressRow;
+      const checkpoints = mockComboCheckpoints.filter(c => c.user_id === userId && c.platform === userPlatform).sort((a,b) => a.position - b.position);
+      const nextPos = (activeProgress.current_position || 0) + 1;
+      const cp = checkpoints.find(c => c.position === nextPos) || null;
+      let isCleared = false;
+      let totalApproved = 0;
+      let remAmount = 0;
+      if (cp) {
+        const cumulativeReq = checkpoints.filter(c => c.position <= nextPos).reduce((s, c) => s + c.trigger_balance, 0);
+        const batchStart = activeProgress.last_reset_at || new Date(0).toISOString();
+        const approvedDeps = mockDeposits.filter(d => d.user_id === userId && d.platform === userPlatform && d.status === 'Approved' && new Date(d.created_at).getTime() >= new Date(batchStart).getTime());
+        totalApproved = approvedDeps.reduce((s, d) => s + d.amount, 0);
+        isCleared = totalApproved >= cumulativeReq;
+        remAmount = Math.max(0, Number((cumulativeReq - totalApproved).toFixed(2)));
+      }
+      const universalBalance = {
+        walletBalance: profile.balance || 0.00,
+        completedReviewsCount: activeProgress.current_position || 0,
+        lastResetAt: activeProgress.last_reset_at || null,
+        isComboBlocked: !!(cp && !isCleared),
+        comboDetails: cp ? { position: nextPos, triggerBalance: cp.trigger_balance, profitAmount: cp.profit_override, depositedAmount: totalApproved, remainingAmount: remAmount, isCleared } : null
+      };
+      const assigned = mockUserAssignedProducts.filter(a => a.user_id === userId);
+      const unlockedPlatforms = Array.from(new Set(assigned.map(a => a.platform)));
+      if (profile.platform && !unlockedPlatforms.includes(profile.platform)) {
+        unlockedPlatforms.push(profile.platform);
+      }
+      return res.json({
+        id: profile.id,
+        username: profile.username,
+        email: profile.email || null,
+        phone: profile.phone || null,
+        role: 'user',
+        status: profile.status,
+        country: profile.country,
+        city: profile.city,
+        referralCode: profile.referral_code,
+        referredBy: profile.referred_by,
+        balances: { Amazon: universalBalance, Alibaba: universalBalance, Shopify: universalBalance },
+        systemConfig: { trc20_address: 'TTisWCo1GTszkukUB6gmmdPRaXYsBATJKM' },
+        platform: profile.platform || null,
+        boundUsdtAddress: profile.bound_usdt_address || null,
+        withdrawalPassword: profile.withdrawal_password || null,
+        profile_photo: profile.profile_photo || null,
+        unlockedPlatforms
+      });
+    }
 
     // Fetch profile from database
     const { data: profile, error } = await supabase
@@ -311,22 +436,27 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
 
     // Fetch review progress for user's active platform
     const userPlatform = profile.platform || 'Amazon';
-    const { data: progressRow } = await supabase
-      .from('platform_balances')
-      .select('reviews_count, current_position, last_reset_at')
-      .eq('user_id', userId)
-      .eq('platform', userPlatform)
-      .maybeSingle();
+    const [{ data: progressRow }, { data: assignedRows }] = await Promise.all([
+      supabase.from('platform_balances').select('reviews_count, current_position, last_reset_at').eq('user_id', userId).eq('platform', userPlatform).maybeSingle(),
+      supabase.from('user_assigned_products').select('product_id').eq('user_id', userId).eq('platform', userPlatform)
+    ]);
 
     const checkpoints = (await supabase
       .from('combo_checkpoints').select('*').eq('user_id', userId).eq('platform', userPlatform).order('position', { ascending: true })).data || [];
 
     const batchStart = progressRow?.last_reset_at ? new Date(progressRow.last_reset_at).toISOString() : new Date(0).toISOString();
-    const { count: completedCount } = await supabase
+    
+    const assignedProductIds = (assignedRows || []).map((x: any) => x.product_id);
+    let subQuery = supabase
       .from('review_submissions').select('id', { count: 'exact', head: true })
-      .eq('user_id', userId).eq('platform', userPlatform).eq('status', 'Completed').gte('created_at', batchStart);
+      .eq('user_id', userId).eq('status', 'Completed').gte('created_at', batchStart);
 
-    const count = completedCount || 0;
+    if (assignedProductIds.length > 0) {
+      subQuery = subQuery.in('product_id', assignedProductIds);
+    }
+
+    const { count: completedCount } = await subQuery;
+    const count = Math.max(completedCount || 0, progressRow?.current_position || 0);
 
     // SINGLE SOURCE OF TRUTH: profile.balance
     const walletBalance = parseFloat(profile.balance as any) || 0.00;
@@ -339,28 +469,31 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
 
     {
       const nextPos = count + 1;
-      // Sync progress if out of date
-      if (progressRow && count !== (progressRow.current_position || 0)) {
-        Promise.resolve(supabase.from('platform_balances').update({ current_position: count, reviews_count: count }).eq('user_id', userId).eq('platform', profile.platform || 'Amazon')).catch(() => {});
+      // Sync progress if database current_position is behind count
+      if (progressRow && count > (progressRow.current_position || 0)) {
+        Promise.resolve(supabase.from('platform_balances').update({ current_position: count, reviews_count: count }).eq('user_id', userId).eq('platform', userPlatform)).catch(() => {});
       }
 
       const cp = checkpoints.find((c: any) => c.position === nextPos) || null;
       let isCleared = false;
+      let totalApprovedDeposits = 0;
+      let remAmount = 0;
       if (cp) {
-        // Get all combo checkpoints at or before nextPos
-        const { data: requiredCheckpoints } = await supabase.from('combo_checkpoints').select('position').eq('user_id', userId).eq('platform', userPlatform).lte('position', nextPos);
-        const requiredPositions = (requiredCheckpoints || []).map((c: any) => c.position);
+        const cumulativeRequiredCombo = checkpoints
+          .filter((c: any) => c.position <= nextPos)
+          .reduce((s: number, c: any) => s + (parseFloat(c.trigger_balance as any) || 0), 0);
 
-        // For each required position, check if there's an approved deposit with matching combo remark
-        let clearedCount = 0;
-        for (const pos of requiredPositions) {
-          const { count } = await supabase.from('deposits').select('id', { count: 'exact', head: true })
-            .eq('user_id', userId).eq('platform', userPlatform).eq('status', 'Approved')
-            .ilike('remark', `%Combo Payment for Position ${pos}%`);
-          if (count && count > 0) clearedCount++;
-        }
+        const { data: approvedDeps } = await supabase
+          .from('deposits')
+          .select('amount')
+          .eq('user_id', userId)
+          .eq('platform', userPlatform)
+          .eq('status', 'Approved')
+          .gte('created_at', batchStart);
 
-        isCleared = clearedCount >= requiredPositions.length;
+        totalApprovedDeposits = (approvedDeps || []).reduce((s: number, d: any) => s + (parseFloat(d.amount as any) || 0), 0);
+        isCleared = totalApprovedDeposits >= cumulativeRequiredCombo;
+        remAmount = Math.max(0, Number((cumulativeRequiredCombo - totalApprovedDeposits).toFixed(2)));
       }
 
       const universalBalance = {
@@ -368,7 +501,14 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
         completedReviewsCount: count,
         lastResetAt: progressRow?.last_reset_at || null,
         isComboBlocked: !!(cp && !isCleared),
-        comboDetails: cp ? { position: nextPos, triggerBalance: parseFloat(cp.trigger_balance as any) || 0, profitAmount: parseFloat(cp.profit_override as any) || 0, isCleared } : null
+        comboDetails: cp ? {
+          position: nextPos,
+          triggerBalance: parseFloat(cp.trigger_balance as any) || 0,
+          profitAmount: parseFloat(cp.profit_override as any) || 0,
+          depositedAmount: totalApprovedDeposits,
+          remainingAmount: remAmount,
+          isCleared
+        } : null
       };
       formattedBalances.Amazon = universalBalance;
       formattedBalances.Alibaba = universalBalance;
@@ -445,7 +585,6 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
   }
 });
 
-// 4. USDT Bind Endpoint
 router.put('/bind-usdt', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.id;
@@ -453,6 +592,16 @@ router.put('/bind-usdt', authenticateToken, async (req: AuthenticatedRequest, re
 
     if (!address || address.trim() === '') {
       return res.status(400).json({ error: 'Address is required' });
+    }
+
+    if (!isDbConfigured()) {
+      const profile = mockProfiles.find(u => u.id === userId);
+      if (!profile) return res.status(404).json({ error: 'Profile not found' });
+      if (profile.bound_usdt_address && profile.bound_usdt_address.trim() !== '') {
+        return res.status(400).json({ error: 'USDT Address is already bound and locked.' });
+      }
+      profile.bound_usdt_address = address.trim();
+      return res.json({ success: true, message: 'USDT Withdrawal Address successfully bound and locked.' });
     }
 
     // 1. Fetch current profile to verify lock constraint
@@ -557,6 +706,30 @@ router.post('/admin/register', async (req: Request, res: Response) => {
     if (clientIp.includes(',')) clientIp = clientIp.split(',')[0].trim();
     if (clientIp === '::1' || clientIp === '::ffff:127.0.0.1') clientIp = '127.0.0.1';
 
+    if (!isDbConfigured()) {
+      const existing = mockAdmins.find(a => a.username.toLowerCase() === username.trim().toLowerCase());
+      if (existing) {
+        return res.status(400).json({ error: 'Username already exists' });
+      }
+      const newAdmin: AdminUser = {
+        id: `admin-${Date.now()}`,
+        username: username.trim(),
+        full_name: full_name.trim(),
+        email: email ? email.trim() : null,
+        phone: phone ? phone.trim() : null,
+        password: password,
+        ip_address: clientIp,
+        status: 'pending',
+        is_restricted: false,
+        created_at: new Date().toISOString()
+      };
+      mockAdmins.push(newAdmin);
+      return res.status(201).json({
+        message: 'Admin registration request successfully submitted. Awaiting Super Admin authorization.',
+        username: newAdmin.username
+      });
+    }
+
     // Check if username already exists in admins or profiles
     let existingUser: any;
     const checkAdmins = await supabase
@@ -622,6 +795,62 @@ router.post('/admin/login', async (req: Request, res: Response) => {
     const { username, password } = req.body;
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password are required' });
+    }
+
+    if (!isDbConfigured()) {
+      let user = mockAdmins.find(a => a.username.toLowerCase() === username.trim().toLowerCase());
+      // Default admin auto-seed if not present
+      if (!user && username.trim().toLowerCase() === 'admin') {
+        user = {
+          id: 'admin-dev-001',
+          username: 'admin',
+          full_name: 'System Admin',
+          email: 'admin@amazonvine.com',
+          password: password, // accept whatever password provided for admin username
+          ip_address: '127.0.0.1',
+          status: 'active',
+          is_restricted: false,
+          created_at: new Date().toISOString()
+        };
+        mockAdmins.push(user);
+      }
+
+      if (!user || user.password !== password) {
+        return res.status(401).json({ error: 'Invalid admin username or password' });
+      }
+
+      if (user.status === 'pending') {
+        return res.status(403).json({ error: 'Your admin account is pending Super Admin approval.' });
+      }
+
+      if (user.status === 'restricted') {
+        return res.status(403).json({ error: 'Your admin account has been suspended. Contact the Super Admin.' });
+      }
+
+      if (user.status === 'rejected') {
+        return res.status(403).json({ error: 'Your admin registration was rejected. Contact the Super Admin.' });
+      }
+
+      if (user.status !== 'active') {
+        return res.status(403).json({ error: 'Admin account is not active.' });
+      }
+
+      const token = jwt.sign(
+        { id: user.id, username: user.username, role: 'admin', isRestricted: !!user.is_restricted },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      return res.json({
+        token,
+        user: {
+          id: user.id,
+          username: user.username,
+          role: 'admin',
+          status: user.status,
+          isRestricted: !!user.is_restricted
+        }
+      });
     }
 
     let user: any;
@@ -692,6 +921,25 @@ router.post('/super/login', async (req: Request, res: Response) => {
     const { email, password } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    if (!isDbConfigured()) {
+      if (email.trim() === 'super@amazonvine.com' && password === 'admin123') {
+        const token = jwt.sign(
+          { id: 'super-admin-001', username: 'super@amazonvine.com', role: 'super_admin' },
+          JWT_SECRET,
+          { expiresIn: '7d' }
+        );
+        return res.json({
+          token,
+          user: {
+            id: 'super-admin-001',
+            username: 'super@amazonvine.com',
+            role: 'super_admin'
+          }
+        });
+      }
+      return res.status(401).json({ error: 'Invalid super admin credentials' });
     }
 
     const { data: superAdmin, error } = await supabase

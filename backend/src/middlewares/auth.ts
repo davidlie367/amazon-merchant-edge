@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
-import { supabase } from '../config/supabase.js';
+import { supabase, isDbConfigured } from '../config/supabase.js';
+import { mockProfiles } from '../config/sandboxStore.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'ecommerce_Vine_secret_hash_2026_secured';
 
@@ -40,49 +41,58 @@ export function authenticateToken(req: AuthenticatedRequest, res: Response, next
     const now = Date.now();
     
     try {
-      if (userPayload.role === 'admin') {
-        const cached = statusCache[userPayload.id];
-        let status = '';
+      if (isDbConfigured()) {
+        if (userPayload.role === 'admin') {
+          const cached = statusCache[userPayload.id];
+          let status = '';
 
-        if (cached && (now - cached.timestamp < CACHE_TTL_MS)) {
-          status = cached.status;
-        } else {
-          const { data: adminUser, error: adminErr } = await supabase
-            .from('admins')
-            .select('status')
-            .eq('id', userPayload.id)
-            .maybeSingle();
+          if (cached && (now - cached.timestamp < CACHE_TTL_MS)) {
+            status = cached.status;
+          } else {
+            const { data: adminUser, error: adminErr } = await supabase
+              .from('admins')
+              .select('status')
+              .eq('id', userPayload.id)
+              .maybeSingle();
 
-          if (!adminErr && adminUser) {
-            status = adminUser.status;
-            statusCache[userPayload.id] = { status, timestamp: now };
+            if (!adminErr && adminUser) {
+              status = adminUser.status;
+              statusCache[userPayload.id] = { status, timestamp: now };
+            }
+          }
+
+          if (status !== 'active') {
+            return res.status(403).json({ error: 'Administrative privileges are suspended or inactive.' });
+          }
+        } else if (userPayload.role === 'user') {
+          const cached = statusCache[userPayload.id];
+          let status = '';
+
+          if (cached && (now - cached.timestamp < CACHE_TTL_MS)) {
+            status = cached.status;
+          } else {
+            const { data: userProfile, error: profileErr } = await supabase
+              .from('profiles')
+              .select('status')
+              .eq('id', userPayload.id)
+              .maybeSingle();
+
+            if (!profileErr && userProfile) {
+              status = userProfile.status || '';
+              statusCache[userPayload.id] = { status, timestamp: now };
+            }
+          }
+
+          if (status === 'restricted') {
+            return res.status(403).json({ error: 'Account has been restricted. Please contact customer service.' });
           }
         }
-
-        if (status !== 'active') {
-          return res.status(403).json({ error: 'Administrative privileges are suspended or inactive.' });
-        }
-      } else if (userPayload.role === 'user') {
-        const cached = statusCache[userPayload.id];
-        let status = '';
-
-        if (cached && (now - cached.timestamp < CACHE_TTL_MS)) {
-          status = cached.status;
-        } else {
-          const { data: userProfile, error: profileErr } = await supabase
-            .from('profiles')
-            .select('status')
-            .eq('id', userPayload.id)
-            .maybeSingle();
-
-          if (!profileErr && userProfile) {
-            status = userProfile.status || '';
-            statusCache[userPayload.id] = { status, timestamp: now };
+      } else {
+        if (userPayload.role === 'user') {
+          const userProfile = mockProfiles.find(u => u.id === userPayload.id);
+          if (userProfile && userProfile.status === 'restricted') {
+            return res.status(403).json({ error: 'Account has been restricted. Please contact customer service.' });
           }
-        }
-
-        if (status === 'restricted') {
-          return res.status(403).json({ error: 'Account has been restricted. Please contact customer service.' });
         }
       }
     } catch (err) {

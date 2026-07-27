@@ -1,8 +1,9 @@
 import express, { Response } from 'express';
-import { supabase, upsertBalance } from '../config/supabase.js';
+import { supabase, upsertBalance, isDbConfigured } from '../config/supabase.js';
 import { authenticateToken, AuthenticatedRequest, requireAdmin } from '../middlewares/auth.js';
 import { broadcastToAdmins } from '../services/wsService.js';
 import { clearCache } from '../services/cacheService.js';
+import { mockProfiles, mockPlatformBalances, mockComboCheckpoints, mockDeposits, mockWithdrawals, Deposit, Withdrawal } from '../config/sandboxStore.js';
 
 const router = express.Router();
 
@@ -40,20 +41,25 @@ router.post('/deposit', authenticateToken, async (req: AuthenticatedRequest, res
     if (clientIp.includes(',')) clientIp = clientIp.split(',')[0].trim();
     if (clientIp === '::1' || clientIp === '::ffff:127.0.0.1') clientIp = '127.0.0.1';
 
-    if (userId === 'user-dev-uuid' || userId === 'admin-dev-uuid') {
+    if (!isDbConfigured()) {
+      const newDep: Deposit = {
+        id: `dep-${Date.now()}`,
+        user_id: userId || 'user-dev-uuid',
+        platform,
+        protocol: normalizedProtocol,
+        amount: numericAmount,
+        crypto_amount: isNaN(normalizedCryptoAmount) ? numericAmount : normalizedCryptoAmount,
+        currency: normalizedCurrency,
+        tx_hash: txHash.trim(),
+        remark: remark || null,
+        ip_address: clientIp,
+        status: 'Pending',
+        created_at: new Date().toISOString()
+      };
+      mockDeposits.push(newDep);
       return res.status(201).json({
-        message: 'Deposit request successfully queued (Sandbox Mode).',
-        deposit: {
-          id: 'deposit-dev-uuid',
-          platform,
-          protocol: normalizedProtocol,
-          amount: numericAmount,
-          crypto_amount: isNaN(normalizedCryptoAmount) ? numericAmount : normalizedCryptoAmount,
-          currency: normalizedCurrency,
-          tx_hash: txHash,
-          ip_address: clientIp,
-          status: 'Pending'
-        }
+        message: 'Deposit request successfully queued. Awaiting administrator approval.',
+        deposit: newDep
       });
     }
 
@@ -158,10 +164,67 @@ router.post('/withdraw', authenticateToken, async (req: AuthenticatedRequest, re
     if (clientIp.includes(',')) clientIp = clientIp.split(',')[0].trim();
     if (clientIp === '::1' || clientIp === '::ffff:127.0.0.1') clientIp = '127.0.0.1';
 
-    if (userId === 'user-dev-uuid' || userId === 'admin-dev-uuid') {
+    if (!isDbConfigured()) {
+      const profile = mockProfiles.find(u => u.id === userId);
+      if (!profile || !profile.bound_usdt_address || profile.bound_usdt_address.trim() === '') {
+        return res.status(400).json({ error: 'Please configure and bind your USDT Withdrawal Address in Profile Settings before submitting withdrawal requests.' });
+      }
+
+      const balRow = mockPlatformBalances.find(b => b.user_id === userId && b.platform === platform);
+      const currentPos = balRow ? (balRow.current_position || 0) : 0;
+      const hasMockWithdrawalHistory = mockWithdrawals.some(w => w.user_id === userId);
+      const isMockFirstTimeUser = !hasMockWithdrawalHistory && !balRow?.last_completed_batch_at;
+
+      if (isMockFirstTimeUser && currentPos < 25) {
+        const remaining = 25 - currentPos;
+        return res.status(400).json({
+          error: `Withdrawal is locked for first-time users until your first batch of 25 reviews is completed. You have ${remaining} order(s) remaining.`,
+          withdrawalLocked: true,
+          completedOrders: currentPos,
+          remainingOrders: remaining
+        });
+      }
+
+      const checkpoints = mockComboCheckpoints.filter(c => c.user_id === userId && c.platform === platform);
+      const batchStart = balRow?.last_reset_at || new Date(0).toISOString();
+      const approvedDeps = mockDeposits.filter(d => d.user_id === userId && d.platform === platform && d.status === 'Approved' && new Date(d.created_at).getTime() >= new Date(batchStart).getTime());
+      const totalApprovedDeposits = approvedDeps.reduce((s, d) => s + d.amount, 0);
+      const cumulativeRequiredCombo = checkpoints.reduce((s, c) => s + c.trigger_balance, 0);
+
+      if (cumulativeRequiredCombo > 0 && totalApprovedDeposits < cumulativeRequiredCombo) {
+        const remainingNeeded = Number((cumulativeRequiredCombo - totalApprovedDeposits).toFixed(2));
+        return res.status(400).json({
+          error: `Withdrawal is locked. Please deposit the remaining $${remainingNeeded.toFixed(2)} USD to clear your Special Combo order requirement first.`
+        });
+      }
+
+      const pendingWithdrawals = mockWithdrawals.filter(w => w.user_id === userId && w.status === 'Pending');
+      const pendingSum = pendingWithdrawals.reduce((s, w) => s + w.amount, 0);
+      const availableBalance = Number(((profile.balance || 0) - pendingSum).toFixed(2));
+
+      if (availableBalance < numericAmount) {
+        return res.status(400).json({
+          error: pendingSum > 0
+            ? `Insufficient available balance. You have $${pendingSum.toFixed(2)} USD reserved in pending withdrawal requests.`
+            : 'Insufficient wallet balance'
+        });
+      }
+
+      const newWithdrawal: Withdrawal = {
+        id: `withdraw-${Date.now()}`,
+        user_id: userId || 'user-dev-uuid',
+        platform,
+        amount: numericAmount,
+        address: profile.bound_usdt_address.trim() + '|' + platform,
+        ip_address: clientIp,
+        status: 'Pending',
+        created_at: new Date().toISOString()
+      };
+      mockWithdrawals.push(newWithdrawal);
+
       return res.status(201).json({
-        message: 'Withdrawal request successfully queued (Sandbox Mode).',
-        withdrawal: { id: 'withdraw-dev-uuid', amount: numericAmount, address: 'TXdfH78ajH7aKjH8sKjD9sKa71La9aKs8F', ip_address: clientIp, status: 'Pending' }
+        message: 'Withdrawal request successfully queued. Approvals complete within 5 minutes.',
+        withdrawal: newWithdrawal
       });
     }
 
@@ -181,7 +244,7 @@ router.post('/withdraw', authenticateToken, async (req: AuthenticatedRequest, re
     // Fetch review progress from platform_balances for the user's active platform
     const { data: progressRow } = await supabase
       .from('platform_balances')
-      .select('current_position, last_reset_at')
+      .select('current_position, last_reset_at, last_completed_batch_at')
       .eq('user_id', userId)
       .eq('platform', platform)
       .maybeSingle();
@@ -198,69 +261,60 @@ router.post('/withdraw', authenticateToken, async (req: AuthenticatedRequest, re
     }
 
     const currentBalance = parseFloat(prof.balance as any) || 0.0;
-    if (currentBalance < numericAmount) {
-      return res.status(400).json({ error: 'Insufficient wallet balance' });
-    }
 
-    // Enforce 25-order compliance gate before allowing withdrawal
-    const currentPosition = progressRow ? (parseInt(progressRow.current_position as any) || 0) : 0;
-
-    // Check if user has any approved withdrawal ever
-    const { data: pastWithdrawals } = await supabase
+    // Subtract pending withdrawals from current balance to find available unreserved balance
+    const { data: pendingWithdrawals } = await supabase
       .from('withdrawals')
-      .select('id')
+      .select('amount')
       .eq('user_id', userId)
-      .eq('status', 'Approved')
-      .limit(1);
+      .eq('status', 'Pending');
 
-    const hasWithdrawnBefore = pastWithdrawals && pastWithdrawals.length > 0;
+    const pendingSum = (pendingWithdrawals || []).reduce((s: number, w: any) => s + (parseFloat(w.amount as any) || 0), 0);
+    const availableBalance = Number((currentBalance - pendingSum).toFixed(2));
 
-    // Verify user doesn't have an uncleared combo (check via approved deposits in current batch)
-    const nextPos = currentPosition + 1;
-    const { data: checkpoint } = await supabase
-      .from('combo_checkpoints')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('platform', platform)
-      .eq('position', nextPos)
-      .maybeSingle();
-
-    let isCleared = false;
-    if (checkpoint) {
-      // Get all combo checkpoints at or before nextPos
-      const { data: requiredCheckpoints } = await supabase
-        .from('combo_checkpoints')
-        .select('position')
-        .eq('user_id', userId)
-        .eq('platform', platform)
-        .lte('position', nextPos);
-      const requiredPositions = (requiredCheckpoints || []).map((c: any) => c.position);
-
-      // For each required position, check if there's an approved deposit with matching combo remark
-      let clearedCount = 0;
-      for (const pos of requiredPositions) {
-        const { count } = await supabase.from('deposits').select('id', { count: 'exact', head: true })
-          .eq('user_id', userId).eq('platform', platform).eq('status', 'Approved')
-          .ilike('remark', `%Combo Payment for Position ${pos}%`);
-        if (count && count > 0) clearedCount++;
-      }
-
-      isCleared = clearedCount >= requiredPositions.length;
-    }
-    if (checkpoint && !isCleared) {
+    if (availableBalance < numericAmount) {
       return res.status(400).json({
-        error: 'Withdrawal is locked. Please pay and complete your pending Special Combo order first.'
+        error: pendingSum > 0
+          ? `Insufficient available balance. You have $${pendingSum.toFixed(2)} USD reserved in pending withdrawal requests.`
+          : 'Insufficient wallet balance'
       });
     }
 
-    // 25-order gate: only enforced for first-time users who have never withdrawn
-    if (!hasWithdrawnBefore && currentPosition < 25) {
+    // Fetch withdrawal history and batch completion status
+    const { data: userWithdrawals } = await supabase
+      .from('withdrawals')
+      .select('id')
+      .eq('user_id', userId);
+
+    const hasWithdrawalHistory = (userWithdrawals || []).length > 0;
+    const hasCompletedPreviousBatch = !!(progressRow?.last_completed_batch_at);
+    const isFirstTimeUser = !hasWithdrawalHistory && !hasCompletedPreviousBatch;
+
+    const currentPosition = progressRow ? (parseInt(progressRow.current_position as any) || 0) : 0;
+    if (isFirstTimeUser && currentPosition < 25) {
       const remaining = 25 - currentPosition;
       return res.status(400).json({
-        error: `Withdrawal is locked. You must complete all 25 orders before withdrawing. You have ${remaining} order(s) remaining.`,
+        error: `Withdrawal is locked for first-time users until your first batch of 25 reviews is completed. You have ${remaining} order(s) remaining.`,
         withdrawalLocked: true,
         completedOrders: currentPosition,
         remainingOrders: remaining
+      });
+    }
+
+    // Verify user doesn't have an uncleared combo checkpoint (cumulative batch approved deposits >= cumulative required)
+    const batchStart = progressRow?.last_reset_at ? new Date(progressRow.last_reset_at).toISOString() : new Date(0).toISOString();
+    const [{ data: checkpoints }, { data: approvedDeps }] = await Promise.all([
+      supabase.from('combo_checkpoints').select('trigger_balance').eq('user_id', userId).eq('platform', platform),
+      supabase.from('deposits').select('amount').eq('user_id', userId).eq('platform', platform).eq('status', 'Approved').gte('created_at', batchStart)
+    ]);
+
+    const cumulativeRequiredCombo = (checkpoints || []).reduce((s: number, cp: any) => s + (parseFloat(cp.trigger_balance as any) || 0), 0);
+    const totalApprovedDeposits = (approvedDeps || []).reduce((s: number, d: any) => s + (parseFloat(d.amount as any) || 0), 0);
+
+    if (cumulativeRequiredCombo > 0 && totalApprovedDeposits < cumulativeRequiredCombo) {
+      const remainingNeeded = Number((cumulativeRequiredCombo - totalApprovedDeposits).toFixed(2));
+      return res.status(400).json({
+        error: `Withdrawal is locked. Please deposit the remaining $${remainingNeeded.toFixed(2)} USD to clear your Special Combo order requirement first.`
       });
     }
 
@@ -379,37 +433,51 @@ router.post('/override-approve-deposit', authenticateToken, requireAdmin, async 
       return res.json({ success: true, message: 'Deposit already processed' });
     }
 
-    // Update status
-    await supabase
-      .from('deposits')
-      .update({ status: 'Approved' })
-      .eq('id', depositId);
+    // Fetch platform progress to check batch start time
+    const { data: progressRow } = await supabase
+      .from('platform_balances')
+      .select('current_position, last_reset_at')
+      .eq('user_id', deposit.user_id)
+      .eq('platform', deposit.platform)
+      .maybeSingle();
 
-    // Credit balance from profiles (single source of truth) + combo profit
-    const [{ data: prof }, { data: progressRow }] = await Promise.all([
+    const batchStart = progressRow?.last_reset_at ? new Date(progressRow.last_reset_at).toISOString() : new Date(0).toISOString();
+
+    // Fetch profile and approved deposits in current batch
+    const [{ data: prof }, { data: pastApproved }] = await Promise.all([
       supabase.from('profiles').select('balance').eq('id', deposit.user_id).maybeSingle(),
-      supabase.from('platform_balances').select('current_position').eq('user_id', deposit.user_id).eq('platform', deposit.platform).maybeSingle()
+      supabase.from('deposits').select('amount').eq('user_id', deposit.user_id).eq('platform', deposit.platform).eq('status', 'Approved').gte('created_at', batchStart)
     ]);
 
     if (prof) {
       const currentBalance = parseFloat(prof.balance as any) || 0.0;
-      const depositAmount = parseFloat(deposit.amount);
-      const currentPos = progressRow?.current_position || 0;
-      const nextPosition = currentPos + 1;
+      const depositAmount = parseFloat(deposit.amount) || 0.0;
 
-      const { data: checkpoint } = await supabase
+      const pastSum = (pastApproved || []).reduce((s: number, d: any) => s + (parseFloat(d.amount) || 0), 0);
+      const newSum = pastSum + depositAmount;
+
+      const { data: checkpoints } = await supabase
         .from('combo_checkpoints')
-        .select('profit_override')
+        .select('position, trigger_balance, profit_override')
         .eq('user_id', deposit.user_id)
         .eq('platform', deposit.platform)
-        .eq('position', nextPosition)
-        .maybeSingle();
+        .order('position', { ascending: true });
 
-      let finalBalance = Number((currentBalance + depositAmount).toFixed(2));
-      if (checkpoint) {
-        const profitOverride = parseFloat(checkpoint.profit_override as any) || 0.00;
-        finalBalance = Number((currentBalance + depositAmount + profitOverride).toFixed(2));
-      }
+      let comboProfitToAdd = 0;
+      let cumulativeReq = 0;
+      let justClearedCombo: any = null;
+
+      (checkpoints || []).forEach((cp: any) => {
+        const req = parseFloat(cp.trigger_balance as any) || 0;
+        cumulativeReq += req;
+
+        if (pastSum < cumulativeReq && newSum >= cumulativeReq) {
+          comboProfitToAdd += parseFloat(cp.profit_override as any) || 0;
+          justClearedCombo = cp;
+        }
+      });
+
+      const finalBalance = Number((currentBalance + depositAmount + comboProfitToAdd).toFixed(2));
 
       const { error: balErr } = await supabase
         .from('profiles')
@@ -419,15 +487,38 @@ router.post('/override-approve-deposit', authenticateToken, requireAdmin, async 
       if (balErr) {
         console.error('Failed to update balance on override-approve:', balErr);
       }
+
+      // Update deposit status to Approved
+      await supabase
+        .from('deposits')
+        .update({ status: 'Approved' })
+        .eq('id', depositId);
+
+      // Check if user satisfied all required combo deposits up to current position
+      const currentPos = progressRow?.current_position || 0;
+      const targetPos = currentPos + 1;
+      const cumulativeReqForTargetPos = (checkpoints || [])
+        .filter((cp: any) => cp.position <= targetPos)
+        .reduce((s: number, cp: any) => s + (parseFloat(cp.trigger_balance as any) || 0), 0);
+
+      if (newSum >= cumulativeReqForTargetPos) {
+        await supabase
+          .from('profiles')
+          .update({ status: 'active' })
+          .eq('id', deposit.user_id);
+      }
+
+      return res.json({
+        success: true,
+        message: 'Developer status override: Deposit approved.',
+        comboCleared: !!justClearedCombo,
+        position: justClearedCombo ? justClearedCombo.position : null,
+        triggerBalance: justClearedCombo ? parseFloat(justClearedCombo.trigger_balance) : 0,
+        profitBonus: justClearedCombo ? parseFloat(justClearedCombo.profit_override) : 0
+      });
     } else {
       console.error('Failed to fetch profile for override-approve');
     }
-
-    // Unlock profile status
-    await supabase
-      .from('profiles')
-      .update({ status: 'active' })
-      .eq('id', deposit.user_id);
 
     res.json({ success: true, message: 'Developer status override: Deposit approved.' });
   } catch (error: any) {

@@ -1,4 +1,5 @@
 import express from 'express';
+// Reload server with reviews and auth fixes
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -129,7 +130,12 @@ app.use('/api/admin', adminRouter);
 const server = http.createServer(app);
 initializeWebSocket(server);
 
-server.listen(PORT, () => {
-  console.log(`🚀 Server listening on port ${PORT}`);
-});
+const isMainModule = process.argv[1] && (process.argv[1].endsWith('server.js') || process.argv[1].endsWith('server.ts'));
+
+if (isMainModule) {
+  server.listen(PORT, () => {
+    console.log(`🚀 Server listening on port ${PORT}`);
+  });
+}
+
 export default app;

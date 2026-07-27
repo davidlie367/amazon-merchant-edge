@@ -1,14 +1,11 @@
 import express, { Response } from 'express';
-import { supabase, upsertBalance } from '../config/supabase.js';
+import { supabase, upsertBalance, isDbConfigured } from '../config/supabase.js';
 import { authenticateToken, requireAdmin, AuthenticatedRequest } from '../middlewares/auth.js';
-import { mockChatMessages } from '../config/sandboxStore.js';
+import { mockChatMessages, mockProfiles, mockPlatformBalances, mockProducts, mockUserAssignedProducts, mockComboCheckpoints, mockDeposits, mockWithdrawals, mockReviewSubmissions, ensureDefaultProducts } from '../config/sandboxStore.js';
 import { broadcastToUser, broadcastToAdmins } from '../services/wsService.js';
 import { getCache, setCache, clearCache } from '../services/cacheService.js';
 
 const router = express.Router();
-
-const isDbConfigured = process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('your-project-id') &&
-                       process.env.SUPABASE_KEY && !process.env.SUPABASE_KEY.includes('your-supabase-anon-key');
 
 // Helper function to log administrative actions
 async function logAdminAction(adminId: string, action: string, targetUserId: string | null, details: string, req: AuthenticatedRequest) {
@@ -58,7 +55,7 @@ router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
       dailyWithdrawals.push({ label, amount: 0 });
     }
 
-    if (!isDbConfigured) {
+    if (!isDbConfigured()) {
       totalUsers = 8;
       activeUsers = 5;
       totalDeposited = 2400.00;
@@ -234,6 +231,41 @@ router.get('/users', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { search, status } = req.query;
 
+    if (!isDbConfigured()) {
+      if (mockProfiles.length === 0) {
+        mockProfiles.push({
+          id: 'dev-user-001',
+          username: 'developer_test',
+          email: 'dev@test.com',
+          password: 'password123',
+          withdrawal_password: '1234',
+          country: 'Pakistan',
+          city: 'Lahore',
+          ip_address: '127.0.0.1',
+          status: 'active',
+          referral_code: 'DEV123',
+          balance: 100.00,
+          platform: 'Amazon',
+          created_at: new Date().toISOString()
+        });
+      }
+      let list = [...mockProfiles];
+      if (status) {
+        list = list.filter(u => u.status === (status as string));
+      }
+      if (search) {
+        const s = String(search).toLowerCase();
+        list = list.filter(u => u.username.toLowerCase().includes(s));
+      }
+      return res.json(list.map(u => ({
+        ...u,
+        balances: { total: u.balance || 0 },
+        activeVIPs: u.platform ? [u.platform] : ['Amazon'],
+        referred_by_username: u.referred_by || null,
+        assignedAdmin: null
+      })));
+    }
+
     let isRestricted = false;
     let assignedUserIds: string[] = [];
 
@@ -380,6 +412,24 @@ router.get('/users/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
 
+    if (!isDbConfigured()) {
+      let user = mockProfiles.find(u => u.id === id);
+      if (!user) {
+        user = { id, username: 'testuser', password: 'password', country: 'Unknown', city: 'Unknown', ip_address: '127.0.0.1', status: 'active', referral_code: 'REF123', balance: 100.00, created_at: new Date().toISOString() };
+      }
+      return res.json({
+        profile: user,
+        balance: user.balance || 0.00,
+        balances: mockPlatformBalances.filter(b => b.user_id === id),
+        deposits: mockDeposits.filter(d => d.user_id === id),
+        withdrawals: mockWithdrawals.filter(w => w.user_id === id),
+        reviews: mockReviewSubmissions.filter(r => r.user_id === id),
+        ipLogs: [],
+        comboRules: mockComboCheckpoints.filter(c => c.user_id === id),
+        chatLogs: mockChatMessages.filter(m => m.user_id === id)
+      });
+    }
+
     const { data: user, error: userError } = await supabase
       .from('profiles')
       .select('*')
@@ -421,6 +471,10 @@ router.get('/users/:id', async (req: AuthenticatedRequest, res: Response) => {
 router.get('/users/:id/reviews', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
+
+    if (!isDbConfigured()) {
+      return res.json(mockReviewSubmissions.filter(r => r.user_id === id));
+    }
     const { data: reviews, error } = await supabase
       .from('review_submissions')
       .select('product_id, platform, created_at')
@@ -444,6 +498,12 @@ router.delete('/users/:id', async (req: AuthenticatedRequest, res: Response) => 
   }
   try {
     const { id } = req.params;
+
+    if (!isDbConfigured()) {
+      const idx = mockProfiles.findIndex(u => u.id === id);
+      if (idx !== -1) mockProfiles.splice(idx, 1);
+      return res.json({ success: true, message: 'User account and all associated data permanently deleted (Sandbox Mode).' });
+    }
 
     // Delete dependent records first to avoid FK constraint violations
     await supabase.from('chat_messages').delete().eq('user_id', id);
@@ -484,7 +544,9 @@ router.put('/users/:id/status', async (req: AuthenticatedRequest, res: Response)
     }
 
     if (status === 'rejected') {
-      if (!isDbConfigured) {
+      if (!isDbConfigured()) {
+        const idx = mockProfiles.findIndex(u => u.id === id);
+        if (idx !== -1) mockProfiles.splice(idx, 1);
         return res.json({ message: 'User successfully rejected and deleted (Sandbox Mode).' });
       }
       const { error: delErr } = await supabase
@@ -501,7 +563,9 @@ router.put('/users/:id/status', async (req: AuthenticatedRequest, res: Response)
       return res.json({ message: 'User successfully rejected and deleted.' });
     }
 
-    if (!isDbConfigured) {
+    if (!isDbConfigured()) {
+      const u = mockProfiles.find(p => p.id === id);
+      if (u) u.status = status;
       return res.json({ message: `User status changed to ${status} (Sandbox Mode)`, user: { id, status } });
     }
 
@@ -544,7 +608,14 @@ router.put('/users/:id/balance', async (req: AuthenticatedRequest, res: Response
       return res.status(400).json({ error: 'Invalid balance delta amount' });
     }
 
-    // Fetch current balance from profiles (single source of truth)
+    if (!isDbConfigured()) {
+      const user = mockProfiles.find(u => u.id === id);
+      if (user) {
+        user.balance = Number(((user.balance || 0) + delta).toFixed(2));
+        return res.json({ message: 'Balance successfully updated (Sandbox Mode)', balance: user.balance });
+      }
+      return res.status(404).json({ error: 'User not found' });
+    }
     const { data: profile, error: profErr } = await supabase
       .from('profiles')
       .select('balance')
@@ -582,6 +653,13 @@ router.put('/users/:id/balance', async (req: AuthenticatedRequest, res: Response
 // 6. View All Pending Deposits
 router.get('/deposits', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    if (!isDbConfigured()) {
+      const pending = mockDeposits.filter(d => d.status === 'Pending').map(d => {
+        const u = mockProfiles.find(p => p.id === d.user_id);
+        return { ...d, profiles: { username: u?.username || 'User' } };
+      });
+      return res.json(pending);
+    }
     // Verify restricted admin access
     const adminId = req.user?.id;
     let isRestricted = false;
@@ -646,6 +724,48 @@ router.put('/deposits/:id/status', async (req: AuthenticatedRequest, res: Respon
       return res.status(400).json({ error: 'Status must be Approved or Rejected' });
     }
 
+    if (!isDbConfigured()) {
+      const deposit = mockDeposits.find(d => d.id === id);
+      if (!deposit) return res.status(404).json({ error: 'Deposit request not found' });
+      if (deposit.status !== 'Pending') return res.status(400).json({ error: 'Deposit request already audited and processed' });
+      deposit.status = status;
+      if (status === 'Approved') {
+        let profile = mockProfiles.find(u => u.id === deposit.user_id);
+        if (!profile) {
+          profile = { id: deposit.user_id, username: 'testuser', password: 'password', country: 'Unknown', city: 'Unknown', ip_address: '127.0.0.1', status: 'active', referral_code: 'REF123', balance: 0.00, created_at: new Date().toISOString() };
+          mockProfiles.push(profile);
+        }
+        const balRow = mockPlatformBalances.find(b => b.user_id === deposit.user_id && b.platform === deposit.platform);
+        const batchStart = balRow?.last_reset_at || new Date(0).toISOString();
+
+        const pastApproved = mockDeposits.filter(d => d.id !== id && d.user_id === deposit.user_id && d.platform === deposit.platform && d.status === 'Approved' && new Date(d.created_at).getTime() >= new Date(batchStart).getTime());
+        const pastSum = pastApproved.reduce((s, d) => s + d.amount, 0);
+        const newSum = pastSum + deposit.amount;
+
+        const checkpoints = mockComboCheckpoints.filter(c => c.user_id === deposit.user_id && c.platform === deposit.platform).sort((a,b) => a.position - b.position);
+        let comboProfitToAdd = 0;
+        let cumulativeReq = 0;
+
+        checkpoints.forEach(cp => {
+          cumulativeReq += cp.trigger_balance;
+          if (pastSum < cumulativeReq && newSum >= cumulativeReq) {
+            comboProfitToAdd += cp.profit_override;
+          }
+        });
+
+        profile.balance = Number(((profile.balance || 0) + deposit.amount + comboProfitToAdd).toFixed(2));
+        if (checkpoints.length > 0) {
+          const totalRequired = checkpoints.reduce((s, c) => s + c.trigger_balance, 0);
+          if (newSum >= totalRequired) {
+            profile.status = 'active';
+          }
+        } else {
+          profile.status = 'active';
+        }
+      }
+      return res.json({ message: `Deposit request ${status.toLowerCase()} successfully (Sandbox Mode).`, deposit });
+    }
+
     // Fetch deposit details
     const { data: deposit, error: fetchError } = await supabase
       .from('deposits')
@@ -684,11 +804,20 @@ router.put('/deposits/:id/status', async (req: AuthenticatedRequest, res: Respon
     }
 
     if (status === 'Approved') {
+      // Fetch platform progress to check batch start time
+      const { data: progressRow } = await supabase
+        .from('platform_balances')
+        .select('current_position, last_reset_at')
+        .eq('user_id', deposit.user_id)
+        .eq('platform', deposit.platform)
+        .maybeSingle();
+
+      const batchStart = progressRow?.last_reset_at ? new Date(progressRow.last_reset_at).toISOString() : new Date(0).toISOString();
+
       // SINGLE SOURCE OF TRUTH: Update profiles.balance BEFORE marking deposit as approved
-      const [{ data: prof }, { data: progressRow }, { data: pastApproved }] = await Promise.all([
+      const [{ data: prof }, { data: pastApproved }] = await Promise.all([
         supabase.from('profiles').select('balance').eq('id', deposit.user_id).maybeSingle(),
-        supabase.from('platform_balances').select('current_position, last_reset_at').eq('user_id', deposit.user_id).eq('platform', deposit.platform).maybeSingle(),
-        supabase.from('deposits').select('amount').eq('user_id', deposit.user_id).eq('platform', deposit.platform).eq('status', 'Approved')
+        supabase.from('deposits').select('amount').eq('user_id', deposit.user_id).eq('platform', deposit.platform).eq('status', 'Approved').gte('created_at', batchStart)
       ]);
 
       if (prof) {
@@ -709,6 +838,7 @@ router.put('/deposits/:id/status', async (req: AuthenticatedRequest, res: Respon
 
         let comboProfitToAdd = 0;
         let cumulativeReq = 0;
+        let comboClearedNow = false;
 
         (checkpoints || []).forEach((cp: any) => {
           const req = parseFloat(cp.trigger_balance as any) || 0;
@@ -717,6 +847,7 @@ router.put('/deposits/:id/status', async (req: AuthenticatedRequest, res: Respon
           // Check if approving this deposit pushes user past cumulativeReq threshold for this combo
           if (pastSum < cumulativeReq && newSum >= cumulativeReq) {
             comboProfitToAdd += parseFloat(cp.profit_override as any) || 0;
+            comboClearedNow = true;
           }
         });
 
@@ -731,16 +862,33 @@ router.put('/deposits/:id/status', async (req: AuthenticatedRequest, res: Respon
           console.error('Failed to update balance on deposit approve:', balUpdateErr);
           return res.status(500).json({ error: 'Failed to credit balance: ' + balUpdateErr.message });
         }
+
+        // Check if user still has an uncleared combo checkpoint for target position
+        const currentPos = progressRow?.current_position || 0;
+        const targetPos = currentPos + 1;
+        const cumulativeReqForTargetPos = (checkpoints || [])
+          .filter((cp: any) => cp.position <= targetPos)
+          .reduce((s: number, cp: any) => s + (parseFloat(cp.trigger_balance as any) || 0), 0);
+
+        if (newSum >= cumulativeReqForTargetPos) {
+          // All required combo deposits for current position satisfied -> Unlock workspace!
+          await supabase
+            .from('profiles')
+            .update({ status: 'active' })
+            .eq('id', deposit.user_id);
+
+          if (comboClearedNow) {
+            broadcastToUser(deposit.user_id, 'combo_cleared', {
+              platform: deposit.platform,
+              totalCredited: depositAmount + comboProfitToAdd,
+              profitBonus: comboProfitToAdd
+            });
+          }
+        }
       } else {
         console.error('Failed to fetch profile for balance update');
         return res.status(500).json({ error: 'User profile not found for balance update' });
       }
-
-      // Set user status to active to unlock workspace
-      await supabase
-        .from('profiles')
-        .update({ status: 'active' })
-        .eq('id', deposit.user_id);
     }
 
     // Update deposit status AFTER balance is credited
@@ -770,6 +918,13 @@ router.put('/deposits/:id/status', async (req: AuthenticatedRequest, res: Respon
 // 8. View All Pending Withdrawals
 router.get('/withdrawals', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    if (!isDbConfigured()) {
+      const pending = mockWithdrawals.filter(w => w.status === 'Pending').map(w => {
+        const user = mockProfiles.find(u => u.id === w.user_id);
+        return { ...w, user_name: user?.username || 'User' };
+      });
+      return res.json(pending);
+    }
     // Verify restricted admin access
     const adminId = req.user?.id;
     let isRestricted = false;
@@ -832,6 +987,20 @@ router.put('/withdrawals/:id/status', async (req: AuthenticatedRequest, res: Res
 
     if (status !== 'Approved' && status !== 'Rejected') {
       return res.status(400).json({ error: 'Status must be Approved or Rejected' });
+    }
+
+    if (!isDbConfigured()) {
+      const withdrawal = mockWithdrawals.find(w => w.id === id);
+      if (!withdrawal) return res.status(404).json({ error: 'Withdrawal record not found' });
+      if (withdrawal.status !== 'Pending') return res.status(400).json({ error: 'Withdrawal request already processed' });
+      withdrawal.status = status;
+      if (status === 'Approved') {
+        const profile = mockProfiles.find(u => u.id === withdrawal.user_id);
+        if (profile) {
+          profile.balance = Number(Math.max(0, (profile.balance || 0) - withdrawal.amount).toFixed(2));
+        }
+      }
+      return res.json({ message: `Withdrawal request ${status.toLowerCase()} successfully (Sandbox Mode).`, withdrawal });
     }
 
     const { data: wRecord, error: fetchError } = await supabase
@@ -951,6 +1120,11 @@ router.put('/withdrawals/:id/status', async (req: AuthenticatedRequest, res: Res
 // 12. Create / List / Edit / Delete Product Pool Campaigns
 router.get('/products', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    if (!isDbConfigured()) {
+      ensureDefaultProducts();
+      return res.json(mockProducts);
+    }
+
     const { platform, search } = req.query;
 
     let query = supabase.from('products').select('*').order('created_at', { ascending: false });
@@ -984,6 +1158,20 @@ router.post('/products', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     const targetPlatform = platform || 'Amazon';
+
+    if (!isDbConfigured()) {
+      const newProd = {
+        id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        title: title.trim(),
+        image_url: imageUrl.trim(),
+        price: parseFloat(price) || 0.00,
+        payout: parseFloat(payout) || 0.00,
+        external_link: externalLink ? externalLink.trim() : '',
+        created_at: new Date().toISOString()
+      };
+      mockProducts.push(newProd);
+      return res.status(201).json({ message: 'Product campaign successfully created (Sandbox Mode)', product: newProd });
+    }
 
     const { data: newProd, error } = await supabase
       .from('products')
@@ -1073,6 +1261,9 @@ router.delete('/products/:id', async (req: AuthenticatedRequest, res: Response) 
 // 13. System Configurations Settings
 router.get('/settings', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    if (!isDbConfigured()) {
+      return res.json({ trc20_address: 'TTisWCo1GTszkukUB6gmmdPRaXYsBATJKM' });
+    }
     const { data: settings, error } = await supabase.from('system_config').select('*');
     if (error) {
       return res.status(500).json({ error: error.message });
@@ -1098,6 +1289,10 @@ router.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
 
     if (!settings || typeof settings !== 'object') {
       return res.status(400).json({ error: 'Settings object is required' });
+    }
+
+    if (!isDbConfigured()) {
+      return res.json({ message: 'System configurations updated successfully (Sandbox Mode).' });
     }
 
     const promises = Object.entries(settings).map(([key, val]) => {
@@ -1134,6 +1329,26 @@ router.post('/users/:id/combos', async (req: AuthenticatedRequest, res: Response
 
     if (!platform || !position || triggerBalance === undefined) {
       return res.status(400).json({ error: 'Platform, position, and triggerBalance are required' });
+    }
+
+    if (!isDbConfigured()) {
+      let cp = mockComboCheckpoints.find(c => c.user_id === id && c.platform === platform && c.position === parseInt(position));
+      if (!cp) {
+        cp = {
+          id: `cp-${Date.now()}`,
+          user_id: id,
+          platform,
+          position: parseInt(position),
+          trigger_balance: parseFloat(triggerBalance),
+          profit_override: parseFloat(profitOverride || 0.00),
+          created_at: new Date().toISOString()
+        };
+        mockComboCheckpoints.push(cp);
+      } else {
+        cp.trigger_balance = parseFloat(triggerBalance);
+        cp.profit_override = parseFloat(profitOverride || 0.00);
+      }
+      return res.json({ message: 'Combo checkpoint rule successfully set.', rule: cp });
     }
 
     const { data, error } = await supabase
@@ -1220,6 +1435,27 @@ router.post('/users/:id/reset-batch', async (req: AuthenticatedRequest, res: Res
     const { id } = req.params;
     const { platform } = req.body;
 
+    if (!isDbConfigured()) {
+      let bal = mockPlatformBalances.find(b => b.user_id === id && b.platform === platform);
+      if (bal) {
+        bal.current_position = 0;
+        bal.reviews_count = 0;
+        bal.last_completed_batch_at = null;
+        bal.last_reset_at = new Date().toISOString();
+      }
+      for (let i = mockUserAssignedProducts.length - 1; i >= 0; i--) {
+        if (mockUserAssignedProducts[i].user_id === id && (!platform || mockUserAssignedProducts[i].platform === platform)) {
+          mockUserAssignedProducts.splice(i, 1);
+        }
+      }
+      for (let i = mockComboCheckpoints.length - 1; i >= 0; i--) {
+        if (mockComboCheckpoints[i].user_id === id && (!platform || mockComboCheckpoints[i].platform === platform)) {
+          mockComboCheckpoints.splice(i, 1);
+        }
+      }
+      return res.json({ message: `Progress for ${platform || 'all platforms'} successfully reset to 0.` });
+    }
+
     let query = supabase
       .from('platform_balances')
       .update({
@@ -1234,6 +1470,15 @@ router.post('/users/:id/reset-batch', async (req: AuthenticatedRequest, res: Res
     const { error } = await query;
     if (error) {
       return res.status(500).json({ error: 'Failed to reset batch: ' + error.message });
+    }
+
+    // Clean batch reset: clear old assigned products and combo checkpoints for this platform
+    if (platform) {
+      await supabase.from('user_assigned_products').delete().eq('user_id', id).eq('platform', platform);
+      await supabase.from('combo_checkpoints').delete().eq('user_id', id).eq('platform', platform);
+    } else {
+      await supabase.from('user_assigned_products').delete().eq('user_id', id);
+      await supabase.from('combo_checkpoints').delete().eq('user_id', id);
     }
 
     // Broadcast real-time update event to connected reviewer client immediately
@@ -1264,6 +1509,15 @@ router.post('/users/:id/bonus', async (req: AuthenticatedRequest, res: Response)
     const numericAmount = parseFloat(amount);
     if (isNaN(numericAmount) || numericAmount <= 0) {
       return res.status(400).json({ error: 'Bonus amount must be positive' });
+    }
+
+    if (!isDbConfigured()) {
+      const user = mockProfiles.find(u => u.id === id);
+      if (user) {
+        user.balance = Number(((user.balance || 0) + numericAmount).toFixed(2));
+        return res.json({ message: 'Bonus successfully credited to user balance (Sandbox Mode).', updatedBalance: user.balance });
+      }
+      return res.status(404).json({ error: 'User profile not found' });
     }
 
     // Validate user existence and status
@@ -1323,6 +1577,9 @@ router.post('/users/:id/bonus', async (req: AuthenticatedRequest, res: Response)
 router.get('/users/:id/bonus-grants', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
+    if (!isDbConfigured()) {
+      return res.json([]);
+    }
     const { data, error } = await supabase
       .from('bonus_grants')
       .select('*')
@@ -1374,10 +1631,7 @@ router.post('/scrape-amazon', async (req: AuthenticatedRequest, res: Response) =
       }
     }
 
-    // 3. Fallback High-Res Image URL from Amazon Media CDN (never blocked by CAPTCHA!)
-    const cdnImageUrl = asin ? `https://images-na.ssl-images-amazon.com/images/P/${asin}.01.LZZZZZZZ.jpg` : '';
-
-    // Extract domain
+    // 3. Clean target URL
     const domainMatch = targetUrl.match(/amazon\.([a-z.]+)/i);
     const domain = domainMatch ? `amazon.${domainMatch[1]}` : 'www.amazon.com';
     const cleanUrl = asin ? `https://${domain}/dp/${asin}` : targetUrl;
@@ -1389,7 +1643,7 @@ router.post('/scrape-amazon', async (req: AuthenticatedRequest, res: Response) =
     try {
       let response = await fetch(cleanUrl, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
           'Accept-Language': 'en-US,en;q=0.9',
           'Cache-Control': 'no-cache',
@@ -1446,18 +1700,18 @@ router.post('/scrape-amazon', async (req: AuthenticatedRequest, res: Response) =
           /<meta\s+property=["']og:image["']\s+content=["'](https?:\/\/[^"']+)["']/i,
           /<meta\s+name=["']twitter:image["']\s+content=["'](https?:\/\/[^"']+)["']/i,
           /<meta\s+itemprop=["']image["']\s+content=["'](https?:\/\/[^"']+)["']/i,
-          /"large"\s*:\s*"(https:\/\/images-na\.ssl-images-amazon\.com\/images\/I\/[^"]+)"/i,
-          /"hiRes"\s*:\s*"(https:\/\/images-na\.ssl-images-amazon\.com\/images\/I\/[^"]+)"/i,
-          /id=["']imgBlkFront["'][^>]*src=["'](https?:\/\/[^"']+)["']/i,
+          /"large"\s*:\s*"(https:\/\/(?:m\.media-amazon\.com|images-na\.ssl-images-amazon\.com)\/images\/I\/[^"]+)"/i,
+          /"hiRes"\s*:\s*"(https:\/\/(?:m\.media-amazon\.com|images-na\.ssl-images-amazon\.com)\/images\/I\/[^"]+)"/i,
           /id=["']landingImage["'][^>]*src=["'](https?:\/\/[^"']+)["']/i,
-          /src="(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/i,
-          /src="(https:\/\/images-na\.ssl-images-amazon\.com\/images\/I\/[^"]+)"/i
+          /id=["']imgBlkFront["'][^>]*src=["'](https?:\/\/[^"']+)["']/i,
+          /"mainUrl"\s*:\s*"(https:\/\/(?:m\.media-amazon\.com|images-na\.ssl-images-amazon\.com)\/images\/I\/[^"]+)"/i,
+          /src="(https:\/\/(?:m\.media-amazon\.com|images-na\.ssl-images-amazon\.com)\/images\/I\/[^"]+)"/i
         ];
         for (const pattern of imagePatterns) {
           const match = html.match(pattern);
           if (match && match[1] && match[1].startsWith('http')) {
             const candidateImg = match[1].replace(/\\u002F/g, '/').replace(/\\/g, '');
-            if (!candidateImg.includes('unsplash.com') && !candidateImg.includes('placeholder') && !candidateImg.includes('fls-na.amazon')) {
+            if (!candidateImg.includes('unsplash.com') && !candidateImg.includes('placeholder') && !candidateImg.includes('fls-na.amazon') && !candidateImg.includes('/images/P/')) {
               imageUrl = candidateImg;
               break;
             }
@@ -1496,8 +1750,8 @@ router.post('/scrape-amazon', async (req: AuthenticatedRequest, res: Response) =
     if (!title || title.length < 4) {
       title = titleFromSlug || (asin ? `Amazon Product (${asin})` : 'Amazon Merchant Product');
     }
-    if (!imageUrl || !imageUrl.startsWith('http')) {
-      imageUrl = cdnImageUrl || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=600&auto=format&fit=crop&q=80';
+    if (!imageUrl || !imageUrl.startsWith('http') || imageUrl.includes('/images/P/')) {
+      imageUrl = 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=600&auto=format&fit=crop&q=80';
     }
 
     const warnings: string[] = [];
@@ -1548,7 +1802,7 @@ router.get('/chats', async (req: AuthenticatedRequest, res: Response) => {
 
     let messages = [];
 
-    if (!isDbConfigured) {
+    if (!isDbConfigured()) {
       messages = [...mockChatMessages].sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     } else {
       let query = supabase
@@ -1650,7 +1904,7 @@ router.get('/chats/:userId', async (req: AuthenticatedRequest, res: Response) =>
 
     let messages = [];
 
-    if (!isDbConfigured) {
+    if (!isDbConfigured()) {
       messages = mockChatMessages.filter(m => m.user_id === userId);
     } else {
       const { data, error } = await supabase
@@ -1705,7 +1959,7 @@ router.post('/chats/:userId/send', async (req: AuthenticatedRequest, res: Respon
 
     const timeVal = time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    if (!isDbConfigured) {
+    if (!isDbConfigured()) {
       const adminMsg = {
         id: `msg-admin-${Date.now()}`,
         user_id: userId,
@@ -1745,6 +1999,28 @@ router.post('/chats/:userId/send', async (req: AuthenticatedRequest, res: Respon
 router.get('/users/:id/vip', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
+
+    if (!isDbConfigured()) {
+      const result: Record<string, { productIds: string[], combos: any[] }> = {
+        Amazon: { productIds: [], combos: [] },
+        Alibaba: { productIds: [], combos: [] },
+        Shopify: { productIds: [], combos: [] }
+      };
+      mockUserAssignedProducts.filter(ap => ap.user_id === id).forEach(ap => {
+        if (result[ap.platform]) result[ap.platform].productIds.push(ap.product_id);
+      });
+      mockComboCheckpoints.filter(cp => cp.user_id === id).forEach(cp => {
+        if (result[cp.platform]) {
+          result[cp.platform].combos.push({
+            id: cp.id,
+            position: cp.position,
+            amount: parseFloat(cp.trigger_balance as any) || 0,
+            profit: parseFloat(cp.profit_override as any) || 0.00
+          });
+        }
+      });
+      return res.json(result);
+    }
 
     // Fetch all assigned products and checkpoints in parallel
     const [apResult, cpResult] = await Promise.all([
@@ -1806,37 +2082,84 @@ router.post('/users/:id/vip', async (req: AuthenticatedRequest, res: Response) =
       return res.status(400).json({ error: 'Platform and productIds array are required' });
     }
 
-    // Enforce max 25 products per batch
-    if (productIds.length > 25) {
-      return res.status(400).json({ error: 'Maximum 25 products can be assigned per batch.' });
+    // Enforce strict 25-product batch model constraint
+    if (productIds.length > 0 && productIds.length !== 25) {
+      return res.status(400).json({ error: 'A product batch must contain exactly 25 products.' });
     }
 
     // If resetProgress is requested, check if user is first-time (never withdrawn)
     // First-time users MUST complete a withdrawal before new orders can be assigned
     if (resetProgress) {
-      const { data: withdrawals } = await supabase
-        .from('withdrawals')
-        .select('id')
-        .eq('user_id', id)
-        .eq('status', 'Approved')
-        .limit(1);
-
-      if (!withdrawals || withdrawals.length === 0) {
-        // First-time user — check if they have any completed reviews at all
-        const { data: balance } = await supabase
-          .from('platform_balances')
-          .select('reviews_count')
+      if (isDbConfigured()) {
+        const { data: withdrawals } = await supabase
+          .from('withdrawals')
+          .select('id')
           .eq('user_id', id)
-          .eq('platform', platform)
-          .maybeSingle();
+          .eq('status', 'Approved')
+          .limit(1);
 
-        if (balance && (balance.reviews_count || 0) >= 25) {
-          return res.status(400).json({
-            error: 'This user must complete their first withdrawal before new orders can be assigned.',
-            requiresWithdrawal: true
-          });
+        if (!withdrawals || withdrawals.length === 0) {
+          // First-time user — check if they have any completed reviews at all
+          const { data: balance } = await supabase
+            .from('platform_balances')
+            .select('reviews_count')
+            .eq('user_id', id)
+            .eq('platform', platform)
+            .maybeSingle();
+
+          if (balance && (balance.reviews_count || 0) >= 25) {
+            return res.status(400).json({
+              error: 'This user must complete their first withdrawal before new orders can be assigned.',
+              requiresWithdrawal: true
+            });
+          }
         }
       }
+    }
+
+    if (!isDbConfigured()) {
+      for (let i = mockUserAssignedProducts.length - 1; i >= 0; i--) {
+        if (mockUserAssignedProducts[i].user_id === id && mockUserAssignedProducts[i].platform === platform) {
+          mockUserAssignedProducts.splice(i, 1);
+        }
+      }
+      productIds.forEach((pId: string, idx: number) => {
+        mockUserAssignedProducts.push({
+          id: `uap-${Date.now()}-${idx}`,
+          user_id: id,
+          product_id: pId,
+          platform,
+          position: idx + 1,
+          created_at: new Date().toISOString()
+        });
+      });
+      for (let i = mockComboCheckpoints.length - 1; i >= 0; i--) {
+        if (mockComboCheckpoints[i].user_id === id && mockComboCheckpoints[i].platform === platform) {
+          mockComboCheckpoints.splice(i, 1);
+        }
+      }
+      if (Array.isArray(combos)) {
+        combos.forEach((c: any) => {
+          mockComboCheckpoints.push({
+            id: `cp-${Date.now()}-${c.position}`,
+            user_id: id,
+            platform,
+            position: c.position,
+            trigger_balance: parseFloat(c.amount) || 0,
+            profit_override: parseFloat(c.profit) || 0,
+            created_at: new Date().toISOString()
+          });
+        });
+      }
+      if (resetProgress) {
+        let bal = mockPlatformBalances.find(b => b.user_id === id && b.platform === platform);
+        if (bal) {
+          bal.current_position = 0;
+          bal.reviews_count = 0;
+          bal.last_reset_at = new Date().toISOString();
+        }
+      }
+      return res.json({ message: 'VIP platform configuration saved successfully (Sandbox Mode).' });
     }
 
     // 1. Clear existing assigned products for this user & platform
@@ -1850,12 +2173,13 @@ router.post('/users/:id/vip', async (req: AuthenticatedRequest, res: Response) =
       return res.status(500).json({ error: 'Failed to clear assigned products: ' + delApErr.message });
     }
 
-    // 2. Insert new assigned products
+    // 2. Insert new assigned products with strict position index (1 to 25)
     if (productIds.length > 0) {
-      const inserts = productIds.map(pId => ({
+      const inserts = productIds.map((pId: string, idx: number) => ({
         user_id: id,
         product_id: pId,
-        platform
+        platform,
+        position: idx + 1
       }));
       const { error: insApErr } = await supabase
         .from('user_assigned_products')
@@ -1937,6 +2261,16 @@ router.post('/users/:id/vip', async (req: AuthenticatedRequest, res: Response) =
 router.delete('/users/:id/vip/:platform', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id, platform } = req.params;
+
+    if (!isDbConfigured()) {
+      for (let i = mockUserAssignedProducts.length - 1; i >= 0; i--) {
+        if (mockUserAssignedProducts[i].user_id === id && mockUserAssignedProducts[i].platform === platform) mockUserAssignedProducts.splice(i, 1);
+      }
+      for (let i = mockComboCheckpoints.length - 1; i >= 0; i--) {
+        if (mockComboCheckpoints[i].user_id === id && mockComboCheckpoints[i].platform === platform) mockComboCheckpoints.splice(i, 1);
+      }
+      return res.json({ success: true, message: `VIP ${platform} workspace locked (Sandbox Mode).` });
+    }
 
     // Delete assigned products
     await supabase.from('user_assigned_products').delete().eq('user_id', id).eq('platform', platform);

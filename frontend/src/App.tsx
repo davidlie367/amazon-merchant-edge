@@ -37,7 +37,6 @@ export default function App() {
   React.useEffect(() => {
     const path = window.location.pathname;
     if (path.startsWith('/admin') || path.startsWith('/super-admin')) {
-      window.location.href = 'https://amazon-backend-pvqm.onrender.com' + path + window.location.search;
       return;
     }
     let targetPath = '/';

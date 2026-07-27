@@ -246,11 +246,13 @@ CREATE TABLE IF NOT EXISTS user_assigned_products (
   user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   platform TEXT NOT NULL,
+  position INT NOT NULL DEFAULT 1,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
   UNIQUE(user_id, product_id, platform)
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_assigned_products_user ON user_assigned_products(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_assigned_products_user_pos ON user_assigned_products(user_id, platform, position);
 
 -- 13. Restricted Admin User Assignments Table
 CREATE TABLE IF NOT EXISTS admin_assigned_users (
@@ -447,6 +449,7 @@ ALTER TABLE profiles ADD COLUMN IF NOT EXISTS phone TEXT;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS email TEXT;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS withdrawal_password TEXT;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS profile_photo TEXT;
+ALTER TABLE user_assigned_products ADD COLUMN IF NOT EXISTS position INT NOT NULL DEFAULT 1;
 
 -- Safety net: enforce max 25 position at database level
 ALTER TABLE platform_balances DROP CONSTRAINT IF EXISTS check_position_limit;

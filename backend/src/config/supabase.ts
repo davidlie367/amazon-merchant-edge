@@ -9,14 +9,26 @@ const __dirname = path.dirname(__filename);
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '../../.env') });
 
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_KEY || '';
+const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
+const supabaseKey = process.env.SUPABASE_KEY || 'placeholder_service_role_key';
 
-if (!supabaseUrl || supabaseUrl.includes('your-project-id')) {
+if (!process.env.SUPABASE_URL || process.env.SUPABASE_URL.includes('your-project-id') || process.env.SUPABASE_URL.includes('placeholder')) {
   console.warn('⚠️ WARNING: SUPABASE_URL is not configured in backend/.env. Database calls will fail.');
 }
-if (!supabaseKey || supabaseKey.includes('your-supabase-anon-key')) {
+if (!process.env.SUPABASE_KEY || process.env.SUPABASE_KEY.includes('your-supabase-anon-key') || process.env.SUPABASE_KEY.includes('placeholder')) {
   console.warn('⚠️ WARNING: SUPABASE_KEY is not configured in backend/.env. Database calls will fail.');
+}
+
+export function isDbConfigured(): boolean {
+  return !!(
+    process.env.SUPABASE_URL &&
+    !process.env.SUPABASE_URL.includes('your-project-id') &&
+    !process.env.SUPABASE_URL.includes('your-supabase-project') &&
+    !process.env.SUPABASE_URL.includes('placeholder') &&
+    process.env.SUPABASE_KEY &&
+    !process.env.SUPABASE_KEY.includes('your-supabase-anon-key') &&
+    !process.env.SUPABASE_KEY.includes('placeholder')
+  );
 }
 
 export const supabase = createClient(supabaseUrl, supabaseKey);

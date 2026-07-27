@@ -2032,10 +2032,10 @@
       let wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       let wsHost = window.location.host;
 
-      // Direct connection to Render backend when deployed on cloud domain (Vercel proxies don't support WS upgrade)
+      // Dynamic WebSocket host resolution (proxied to localhost:5000 in dev, or current host in production)
       if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        wsProto = 'wss:';
-        wsHost = 'amazon-backend-pvqm.onrender.com';
+        wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsHost = window.location.host;
       } else if (window.location.port === '3000') {
         wsHost = 'localhost:5000';
       }
