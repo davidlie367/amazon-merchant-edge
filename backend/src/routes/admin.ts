@@ -738,17 +738,36 @@ router.put('/deposits/:id/status', async (req: AuthenticatedRequest, res: Respon
         const balRow = mockPlatformBalances.find(b => b.user_id === deposit.user_id && b.platform === deposit.platform);
         const batchStart = balRow?.last_reset_at || new Date(0).toISOString();
 
-        const pastApproved = mockDeposits.filter(d => d.id !== id && d.user_id === deposit.user_id && d.platform === deposit.platform && d.status === 'Approved' && new Date(d.created_at).getTime() >= new Date(batchStart).getTime());
+        const pastApproved = mockDeposits.filter(d => d.id !== id && d.user_id === deposit.user_id && d.platform === deposit.platform && d.status === 'Approved' && new Date(d.created_at).getTime() >= new Date(batchStart).getTime()).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
         const pastSum = pastApproved.reduce((s, d) => s + d.amount, 0);
         const newSum = pastSum + deposit.amount;
 
         const checkpoints = mockComboCheckpoints.filter(c => c.user_id === deposit.user_id && c.platform === deposit.platform).sort((a,b) => a.position - b.position);
+
+        let preComboDeposits = 0;
+        if (checkpoints.length > 0 && checkpoints[0].position > 1) {
+          const firstComboPos = checkpoints[0].position;
+          const userSubs = mockReviewSubmissions
+            .filter(s => s.user_id === deposit.user_id && s.platform === deposit.platform && s.status === 'Completed' && new Date(s.created_at).getTime() >= new Date(batchStart).getTime())
+            .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+          if (userSubs.length >= (firstComboPos - 1)) {
+            const preComboCutoff = userSubs[firstComboPos - 2].created_at;
+            preComboDeposits = pastApproved
+              .filter(d => new Date(d.created_at).getTime() <= new Date(preComboCutoff).getTime())
+              .reduce((s, d) => s + d.amount, 0);
+          } else {
+            preComboDeposits = pastSum;
+          }
+        }
+        const effectivePastSum = Math.max(0, pastSum - preComboDeposits);
+        const effectiveNewSum = Math.max(0, newSum - preComboDeposits);
+
         let comboProfitToAdd = 0;
         let cumulativeReq = 0;
 
         checkpoints.forEach(cp => {
           cumulativeReq += cp.trigger_balance;
-          if (pastSum < cumulativeReq && newSum >= cumulativeReq) {
+          if (effectivePastSum < cumulativeReq && effectiveNewSum >= cumulativeReq) {
             comboProfitToAdd += cp.profit_override;
           }
         });
@@ -817,7 +836,7 @@ router.put('/deposits/:id/status', async (req: AuthenticatedRequest, res: Respon
       // SINGLE SOURCE OF TRUTH: Update profiles.balance BEFORE marking deposit as approved
       const [{ data: prof }, { data: pastApproved }] = await Promise.all([
         supabase.from('profiles').select('balance').eq('id', deposit.user_id).maybeSingle(),
-        supabase.from('deposits').select('amount').eq('user_id', deposit.user_id).eq('platform', deposit.platform).eq('status', 'Approved').gte('created_at', batchStart)
+        supabase.from('deposits').select('amount, created_at').eq('user_id', deposit.user_id).eq('platform', deposit.platform).eq('status', 'Approved').gte('created_at', batchStart).order('created_at', { ascending: true })
       ]);
 
       if (prof) {
@@ -836,6 +855,33 @@ router.put('/deposits/:id/status', async (req: AuthenticatedRequest, res: Respon
           .eq('platform', deposit.platform)
           .order('position', { ascending: true });
 
+        const sortedCPs = checkpoints ? [...checkpoints].sort((a: any, b: any) => a.position - b.position) : [];
+        const firstComboPos = sortedCPs.length > 0 ? sortedCPs[0].position : 1;
+        let preComboDeposits = 0;
+
+        if (firstComboPos > 1) {
+          const { data: cutoffReviews } = await supabase
+            .from('review_submissions')
+            .select('created_at')
+            .eq('user_id', deposit.user_id)
+            .eq('platform', deposit.platform)
+            .eq('status', 'Completed')
+            .gte('created_at', batchStart)
+            .order('created_at', { ascending: true });
+
+          if (cutoffReviews && cutoffReviews.length >= (firstComboPos - 1)) {
+            const preComboCutoff = cutoffReviews[firstComboPos - 2].created_at;
+            preComboDeposits = (pastApproved || [])
+              .filter((d: any) => new Date(d.created_at).getTime() <= new Date(preComboCutoff).getTime())
+              .reduce((s: number, d: any) => s + (parseFloat(d.amount as any) || 0), 0);
+          } else {
+            preComboDeposits = pastSum;
+          }
+        }
+
+        const effectivePastSum = Math.max(0, Number((pastSum - preComboDeposits).toFixed(2)));
+        const effectiveNewSum = Math.max(0, Number((newSum - preComboDeposits).toFixed(2)));
+
         let comboProfitToAdd = 0;
         let cumulativeReq = 0;
         let comboClearedNow = false;
@@ -845,7 +891,7 @@ router.put('/deposits/:id/status', async (req: AuthenticatedRequest, res: Respon
           cumulativeReq += req;
 
           // Check if approving this deposit pushes user past cumulativeReq threshold for this combo
-          if (pastSum < cumulativeReq && newSum >= cumulativeReq) {
+          if (effectivePastSum < cumulativeReq && effectiveNewSum >= cumulativeReq) {
             comboProfitToAdd += parseFloat(cp.profit_override as any) || 0;
             comboClearedNow = true;
           }

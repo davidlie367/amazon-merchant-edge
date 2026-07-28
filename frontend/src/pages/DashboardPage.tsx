@@ -423,10 +423,11 @@ export default function DashboardPage({
         const activePlatData = activePlat ? userData.balances?.[activePlat] : null;
         if (activePlatData?.comboDetails?.isCleared) {
           const comboPos = activePlatData.comboDetails.position;
-          const posKey = `${activePlat}_${comboPos}`;
-          const dismissKey1 = `combo_cleared_dismissed_${activePlat}_${comboPos}`;
-          const dismissKey2 = `combo_cleared_dismissed_${userData.id}_${activePlat}_${comboPos}`;
-          const dismissKey3 = `combo_cleared_dismissed_${username}_${activePlat}_${comboPos}`;
+          const lastReset = activePlatData.lastResetAt || '0';
+          const posKey = `${activePlat}_${lastReset}_${comboPos}`;
+          const dismissKey1 = `combo_cleared_dismissed_${activePlat}_${lastReset}_${comboPos}`;
+          const dismissKey2 = `combo_cleared_dismissed_${userData.id}_${activePlat}_${lastReset}_${comboPos}`;
+          const dismissKey3 = `combo_cleared_dismissed_${username}_${activePlat}_${lastReset}_${comboPos}`;
 
           const isDismissed = localStorage.getItem(dismissKey1) || localStorage.getItem(dismissKey2) || localStorage.getItem(dismissKey3);
 

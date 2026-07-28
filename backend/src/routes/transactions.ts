@@ -446,7 +446,7 @@ router.post('/override-approve-deposit', authenticateToken, requireAdmin, async 
     // Fetch profile and approved deposits in current batch
     const [{ data: prof }, { data: pastApproved }] = await Promise.all([
       supabase.from('profiles').select('balance').eq('id', deposit.user_id).maybeSingle(),
-      supabase.from('deposits').select('amount').eq('user_id', deposit.user_id).eq('platform', deposit.platform).eq('status', 'Approved').gte('created_at', batchStart)
+      supabase.from('deposits').select('amount, created_at').eq('user_id', deposit.user_id).eq('platform', deposit.platform).eq('status', 'Approved').gte('created_at', batchStart).order('created_at', { ascending: true })
     ]);
 
     if (prof) {
@@ -463,6 +463,33 @@ router.post('/override-approve-deposit', authenticateToken, requireAdmin, async 
         .eq('platform', deposit.platform)
         .order('position', { ascending: true });
 
+      const sortedCPs = checkpoints ? [...checkpoints].sort((a: any, b: any) => a.position - b.position) : [];
+      const firstComboPos = sortedCPs.length > 0 ? sortedCPs[0].position : 1;
+      let preComboDeposits = 0;
+
+      if (firstComboPos > 1) {
+        const { data: cutoffReviews } = await supabase
+          .from('review_submissions')
+          .select('created_at')
+          .eq('user_id', deposit.user_id)
+          .eq('platform', deposit.platform)
+          .eq('status', 'Completed')
+          .gte('created_at', batchStart)
+          .order('created_at', { ascending: true });
+
+        if (cutoffReviews && cutoffReviews.length >= (firstComboPos - 1)) {
+          const preComboCutoff = cutoffReviews[firstComboPos - 2].created_at;
+          preComboDeposits = (pastApproved || [])
+            .filter((d: any) => new Date(d.created_at).getTime() <= new Date(preComboCutoff).getTime())
+            .reduce((s: number, d: any) => s + (parseFloat(d.amount as any) || 0), 0);
+        } else {
+          preComboDeposits = pastSum;
+        }
+      }
+
+      const effectivePastSum = Math.max(0, Number((pastSum - preComboDeposits).toFixed(2)));
+      const effectiveNewSum = Math.max(0, Number((newSum - preComboDeposits).toFixed(2)));
+
       let comboProfitToAdd = 0;
       let cumulativeReq = 0;
       let justClearedCombo: any = null;
@@ -471,7 +498,7 @@ router.post('/override-approve-deposit', authenticateToken, requireAdmin, async 
         const req = parseFloat(cp.trigger_balance as any) || 0;
         cumulativeReq += req;
 
-        if (pastSum < cumulativeReq && newSum >= cumulativeReq) {
+        if (effectivePastSum < cumulativeReq && effectiveNewSum >= cumulativeReq) {
           comboProfitToAdd += parseFloat(cp.profit_override as any) || 0;
           justClearedCombo = cp;
         }

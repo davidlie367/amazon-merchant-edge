@@ -385,10 +385,29 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
       if (cp) {
         const cumulativeReq = checkpoints.filter(c => c.position <= nextPos).reduce((s, c) => s + c.trigger_balance, 0);
         const batchStart = activeProgress.last_reset_at || new Date(0).toISOString();
-        const approvedDeps = mockDeposits.filter(d => d.user_id === userId && d.platform === userPlatform && d.status === 'Approved' && new Date(d.created_at).getTime() >= new Date(batchStart).getTime());
+        const approvedDeps = mockDeposits
+          .filter(d => d.user_id === userId && d.platform === userPlatform && d.status === 'Approved' && new Date(d.created_at).getTime() >= new Date(batchStart).getTime())
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
         totalApproved = approvedDeps.reduce((s, d) => s + d.amount, 0);
-        isCleared = totalApproved >= cumulativeReq;
-        remAmount = Math.max(0, Number((cumulativeReq - totalApproved).toFixed(2)));
+
+        const firstComboPos = checkpoints[0].position;
+        let preComboDeposits = 0;
+        if (firstComboPos > 1) {
+          const userSubs = mockReviewSubmissions
+            .filter(s => s.user_id === userId && s.platform === userPlatform && s.status === 'Completed' && new Date(s.created_at).getTime() >= new Date(batchStart).getTime())
+            .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+          if (userSubs.length >= (firstComboPos - 1)) {
+            const preComboCutoff = userSubs[firstComboPos - 2].created_at;
+            preComboDeposits = approvedDeps
+              .filter(d => new Date(d.created_at).getTime() <= new Date(preComboCutoff).getTime())
+              .reduce((s, d) => s + d.amount, 0);
+          } else {
+            preComboDeposits = totalApproved;
+          }
+        }
+        const effectiveApproved = Math.max(0, Number((totalApproved - preComboDeposits).toFixed(2)));
+        isCleared = effectiveApproved >= cumulativeReq;
+        remAmount = Math.max(0, Number((cumulativeReq - effectiveApproved).toFixed(2)));
       }
       const universalBalance = {
         walletBalance: profile.balance || 0.00,
@@ -485,15 +504,42 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
 
         const { data: approvedDeps } = await supabase
           .from('deposits')
-          .select('amount')
+          .select('amount, created_at')
           .eq('user_id', userId)
           .eq('platform', userPlatform)
           .eq('status', 'Approved')
-          .gte('created_at', batchStart);
+          .gte('created_at', batchStart)
+          .order('created_at', { ascending: true });
 
         totalApprovedDeposits = (approvedDeps || []).reduce((s: number, d: any) => s + (parseFloat(d.amount as any) || 0), 0);
-        isCleared = totalApprovedDeposits >= cumulativeRequiredCombo;
-        remAmount = Math.max(0, Number((cumulativeRequiredCombo - totalApprovedDeposits).toFixed(2)));
+
+        const sortedCheckpoints = [...checkpoints].sort((a: any, b: any) => a.position - b.position);
+        const firstComboPos = sortedCheckpoints[0].position;
+        let preComboDeposits = 0;
+
+        if (firstComboPos > 1) {
+          const { data: cutoffReviews } = await supabase
+            .from('review_submissions')
+            .select('created_at')
+            .eq('user_id', userId)
+            .eq('platform', userPlatform)
+            .eq('status', 'Completed')
+            .gte('created_at', batchStart)
+            .order('created_at', { ascending: true });
+
+          if (cutoffReviews && cutoffReviews.length >= (firstComboPos - 1)) {
+            const preComboCutoff = cutoffReviews[firstComboPos - 2].created_at;
+            preComboDeposits = (approvedDeps || [])
+              .filter((d: any) => new Date(d.created_at).getTime() <= new Date(preComboCutoff).getTime())
+              .reduce((s: number, d: any) => s + (parseFloat(d.amount as any) || 0), 0);
+          } else {
+            preComboDeposits = totalApprovedDeposits;
+          }
+        }
+
+        const effectiveApproved = Math.max(0, Number((totalApprovedDeposits - preComboDeposits).toFixed(2)));
+        isCleared = effectiveApproved >= cumulativeRequiredCombo;
+        remAmount = Math.max(0, Number((cumulativeRequiredCombo - effectiveApproved).toFixed(2)));
       }
 
       const universalBalance = {
