@@ -42,7 +42,8 @@ import {
   Home,
   MessageSquare,
   Send,
-  Paperclip
+  Paperclip,
+  Trash2
 } from 'lucide-react';
 import { Product } from '../types';
 
@@ -4474,7 +4475,7 @@ export default function DashboardPage({
                             key={msg.id}
                             className={`flex group ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
                           >
-                            {/* Three-dot delete button — shows on hover, left side for user msgs */}
+                            {/* Trash delete button — shows on hover, left side for user's own messages ONLY */}
                             {msg.sender === 'user' && (
                               <div className="flex items-center mr-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
                                 <button
@@ -4482,11 +4483,7 @@ export default function DashboardPage({
                                   title="Delete message"
                                   className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
                                 >
-                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-                                    <circle cx="10" cy="4" r="1.5"/>
-                                    <circle cx="10" cy="10" r="1.5"/>
-                                    <circle cx="10" cy="16" r="1.5"/>
-                                  </svg>
+                                  <Trash2 className="h-3.5 w-3.5" />
                                 </button>
                               </div>
                             )}
@@ -4510,23 +4507,6 @@ export default function DashboardPage({
                                 {msg.time}
                               </span>
                             </div>
-
-                            {/* Three-dot delete button — right side for admin/support msgs */}
-                            {msg.sender !== 'user' && (
-                              <div className="flex items-center ml-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-                                <button
-                                  onClick={() => handleDeleteChatMessage(msg.id)}
-                                  title="Delete message"
-                                  className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
-                                >
-                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-                                    <circle cx="10" cy="4" r="1.5"/>
-                                    <circle cx="10" cy="10" r="1.5"/>
-                                    <circle cx="10" cy="16" r="1.5"/>
-                                  </svg>
-                                </button>
-                              </div>
-                            )}
                           </div>
                         ))}
 

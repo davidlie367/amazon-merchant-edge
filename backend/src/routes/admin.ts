@@ -2041,30 +2041,31 @@ router.post('/chats/:userId/send', async (req: AuthenticatedRequest, res: Respon
   }
 });
 
-// 21b. Delete a chat message (admin can delete any message in user thread)
+// 21b. Delete a chat message (admin can delete only admin messages)
 router.delete('/chats/:userId/messages/:messageId', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { userId, messageId } = req.params;
 
     if (!isDbConfigured()) {
-      const idx = mockChatMessages.findIndex(m => m.id === messageId && m.user_id === userId);
+      const idx = mockChatMessages.findIndex(m => m.id === messageId && m.user_id === userId && m.sender === 'admin');
       if (idx === -1) {
-        return res.status(404).json({ error: 'Message not found' });
+        return res.status(404).json({ error: 'Message not found or access denied' });
       }
       mockChatMessages.splice(idx, 1);
       return res.json({ success: true, message: 'Message deleted.' });
     }
 
-    // Verify the message belongs to this user's thread
+    // Verify the message belongs to this thread and was sent by 'admin'
     const { data: existing, error: fetchErr } = await supabase
       .from('chat_messages')
-      .select('id')
+      .select('id, sender')
       .eq('id', messageId)
       .eq('user_id', userId)
+      .eq('sender', 'admin')
       .maybeSingle();
 
     if (fetchErr || !existing) {
-      return res.status(404).json({ error: 'Message not found' });
+      return res.status(404).json({ error: 'Message not found or access denied' });
     }
 
     const { error: deleteErr } = await supabase

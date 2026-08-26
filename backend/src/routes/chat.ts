@@ -247,7 +247,7 @@ router.post('/upload', authenticateToken, async (req: AuthenticatedRequest, res:
   }
 });
 
-// 4. Delete a chat message (user can delete messages from their own thread)
+// 4. Delete a chat message (user can delete only their own messages)
 router.delete('/:messageId', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.id;
@@ -258,7 +258,7 @@ router.delete('/:messageId', authenticateToken, async (req: AuthenticatedRequest
     }
 
     if (!isDbConfigured()) {
-      const idx = mockChatMessages.findIndex(m => m.id === messageId && m.user_id === (userId || 'user-dev-uuid'));
+      const idx = mockChatMessages.findIndex(m => m.id === messageId && m.user_id === (userId || 'user-dev-uuid') && m.sender === 'user');
       if (idx === -1) {
         return res.status(404).json({ error: 'Message not found or access denied' });
       }
@@ -266,12 +266,13 @@ router.delete('/:messageId', authenticateToken, async (req: AuthenticatedRequest
       return res.json({ success: true, message: 'Message deleted successfully.' });
     }
 
-    // Verify the message belongs to this user's thread before deleting
+    // Verify the message belongs to this user and was sent by 'user'
     const { data: existing, error: fetchErr } = await supabase
       .from('chat_messages')
-      .select('id, user_id')
+      .select('id, user_id, sender')
       .eq('id', messageId)
       .eq('user_id', userId)
+      .eq('sender', 'user')
       .maybeSingle();
 
     if (fetchErr || !existing) {
