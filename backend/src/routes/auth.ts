@@ -736,6 +736,126 @@ router.put('/update-profile', authenticateToken, async (req: AuthenticatedReques
 });
 
 // ==========================================
+// 4.7. Change Login Password Endpoint (user self-service)
+// ==========================================
+router.put('/change-password', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required.' });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'New password must be at least 8 characters.' });
+    }
+
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ error: 'New password must be different from current password.' });
+    }
+
+    if (!isDbConfigured()) {
+      const profile = mockProfiles.find(u => u.id === userId);
+      if (!profile) return res.status(404).json({ error: 'Profile not found.' });
+      if (profile.password !== currentPassword) {
+        return res.status(401).json({ error: 'Current password is incorrect.' });
+      }
+      profile.password = newPassword;
+      return res.json({ success: true, message: 'Login password updated successfully.' });
+    }
+
+    // Fetch current password from DB
+    const { data: profile, error: fetchErr } = await supabase
+      .from('profiles')
+      .select('password')
+      .eq('id', userId)
+      .single();
+
+    if (fetchErr || !profile) {
+      return res.status(404).json({ error: 'Profile not found.' });
+    }
+
+    if (profile.password !== currentPassword) {
+      return res.status(401).json({ error: 'Current password is incorrect.' });
+    }
+
+    const { error: updateErr } = await supabase
+      .from('profiles')
+      .update({ password: newPassword })
+      .eq('id', userId);
+
+    if (updateErr) {
+      return res.status(500).json({ error: 'Failed to update password: ' + updateErr.message });
+    }
+
+    res.json({ success: true, message: 'Login password updated successfully.' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// ==========================================
+// 4.8. Change Withdrawal PIN Endpoint (user self-service)
+// ==========================================
+router.put('/change-withdrawal-pin', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { currentPin, newPin } = req.body;
+
+    if (!currentPin || !newPin) {
+      return res.status(400).json({ error: 'Current PIN and new PIN are required.' });
+    }
+
+    if (!/^\d{4}$/.test(newPin)) {
+      return res.status(400).json({ error: 'New withdrawal PIN must be exactly 4 digits.' });
+    }
+
+    if (currentPin === newPin) {
+      return res.status(400).json({ error: 'New PIN must be different from current PIN.' });
+    }
+
+    if (!isDbConfigured()) {
+      const profile = mockProfiles.find(u => u.id === userId);
+      if (!profile) return res.status(404).json({ error: 'Profile not found.' });
+      if (profile.withdrawal_password !== currentPin) {
+        return res.status(401).json({ error: 'Current withdrawal PIN is incorrect.' });
+      }
+      profile.withdrawal_password = newPin;
+      return res.json({ success: true, message: 'Withdrawal PIN updated successfully.' });
+    }
+
+    // Fetch current withdrawal PIN from DB
+    const { data: profile, error: fetchErr } = await supabase
+      .from('profiles')
+      .select('withdrawal_password')
+      .eq('id', userId)
+      .single();
+
+    if (fetchErr || !profile) {
+      return res.status(404).json({ error: 'Profile not found.' });
+    }
+
+    if (profile.withdrawal_password !== currentPin) {
+      return res.status(401).json({ error: 'Current withdrawal PIN is incorrect.' });
+    }
+
+    const { error: updateErr } = await supabase
+      .from('profiles')
+      .update({ withdrawal_password: newPin })
+      .eq('id', userId);
+
+    if (updateErr) {
+      return res.status(500).json({ error: 'Failed to update withdrawal PIN: ' + updateErr.message });
+    }
+
+    res.json({ success: true, message: 'Withdrawal PIN updated successfully.' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// ==========================================
 // 5. Admin Panel Separate Auth endpoints
 // ==========================================
 

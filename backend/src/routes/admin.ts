@@ -2041,6 +2041,47 @@ router.post('/chats/:userId/send', async (req: AuthenticatedRequest, res: Respon
   }
 });
 
+// 21b. Delete a chat message (admin can delete any message in user thread)
+router.delete('/chats/:userId/messages/:messageId', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { userId, messageId } = req.params;
+
+    if (!isDbConfigured()) {
+      const idx = mockChatMessages.findIndex(m => m.id === messageId && m.user_id === userId);
+      if (idx === -1) {
+        return res.status(404).json({ error: 'Message not found' });
+      }
+      mockChatMessages.splice(idx, 1);
+      return res.json({ success: true, message: 'Message deleted.' });
+    }
+
+    // Verify the message belongs to this user's thread
+    const { data: existing, error: fetchErr } = await supabase
+      .from('chat_messages')
+      .select('id')
+      .eq('id', messageId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (fetchErr || !existing) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+
+    const { error: deleteErr } = await supabase
+      .from('chat_messages')
+      .delete()
+      .eq('id', messageId);
+
+    if (deleteErr) {
+      return res.status(500).json({ error: 'Failed to delete message: ' + deleteErr.message });
+    }
+
+    res.json({ success: true, message: 'Message deleted.' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
 // 22. Get User VIP Configuration (assigned products & checkpoints)
 router.get('/users/:id/vip', async (req: AuthenticatedRequest, res: Response) => {
   try {

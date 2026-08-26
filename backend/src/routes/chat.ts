@@ -247,4 +247,51 @@ router.post('/upload', authenticateToken, async (req: AuthenticatedRequest, res:
   }
 });
 
+// 4. Delete a chat message (user can delete messages from their own thread)
+router.delete('/:messageId', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { messageId } = req.params;
+
+    if (!messageId) {
+      return res.status(400).json({ error: 'Message ID is required' });
+    }
+
+    if (!isDbConfigured()) {
+      const idx = mockChatMessages.findIndex(m => m.id === messageId && m.user_id === (userId || 'user-dev-uuid'));
+      if (idx === -1) {
+        return res.status(404).json({ error: 'Message not found or access denied' });
+      }
+      mockChatMessages.splice(idx, 1);
+      return res.json({ success: true, message: 'Message deleted successfully.' });
+    }
+
+    // Verify the message belongs to this user's thread before deleting
+    const { data: existing, error: fetchErr } = await supabase
+      .from('chat_messages')
+      .select('id, user_id')
+      .eq('id', messageId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (fetchErr || !existing) {
+      return res.status(404).json({ error: 'Message not found or access denied' });
+    }
+
+    const { error: deleteErr } = await supabase
+      .from('chat_messages')
+      .delete()
+      .eq('id', messageId);
+
+    if (deleteErr) {
+      return res.status(500).json({ error: 'Failed to delete message: ' + deleteErr.message });
+    }
+
+    res.json({ success: true, message: 'Message deleted successfully.' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
 export default router;
+

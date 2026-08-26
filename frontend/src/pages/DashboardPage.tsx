@@ -303,7 +303,7 @@ export default function DashboardPage({
   const [profileActiveSection, setProfileActiveSection] = useState<'details' | 'wallet' | 'security'>('details');
   const [profileEmail, setProfileEmail] = useState(username.toLowerCase().replace(/\s+/g, '') + '@gmail.com');
   const [profilePhone, setProfilePhone] = useState('+1 (555) 019-2831');
-  const [profilePassword, setProfilePassword] = useState('password123');
+  const [profilePassword, setProfilePassword] = useState('');
   const [referralCode, setReferralCode] = useState('');
   const [withdrawalPassword, setWithdrawalPassword] = useState('1234');
   const [enable2FA, setEnable2FA] = useState(false);
@@ -1129,56 +1129,93 @@ export default function DashboardPage({
     showToast(`Successfully exported ${activePlatform} compliance ledger to CSV!`);
   };
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSavingPassword) return;
-    if (oldPassword !== profilePassword) {
-      showToast("Error: Current login password does not match.");
-      return;
-    }
+
     if (newPassword.length < 8) {
-      showToast("Error: New login password must be at least 8 characters.");
+      showToast('Error: New password must be at least 8 characters.');
       return;
     }
     if (newPassword !== confirmPassword) {
-      showToast("Error: Confirm password does not match new password.");
+      showToast('Error: Confirm password does not match new password.');
       return;
     }
+    if (oldPassword === newPassword) {
+      showToast('Error: New password must be different from current password.');
+      return;
+    }
+
     setIsSavingPassword(true);
-    setTimeout(() => {
-      setProfilePassword(newPassword);
-      setOldPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      showToast("✓ Login security password changed successfully.");
+    try {
+      const token = localStorage.getItem('reviewer_auth_token');
+      const res = await fetch(`${API_BASE}/auth/change-password`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ currentPassword: oldPassword, newPassword })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setOldPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        showToast('✓ Login password changed successfully.');
+      } else {
+        showToast('Error: ' + (data.error || 'Failed to update password.'));
+      }
+    } catch (err) {
+      showToast('Network error. Please try again.');
+    } finally {
       setIsSavingPassword(false);
-    }, 500);
+    }
   };
 
-  const handleChangeWithdrawalPassword = (e: React.FormEvent) => {
+  const handleChangeWithdrawalPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSavingPIN) return;
-    if (oldWithdrawalPassword !== withdrawalPassword) {
-      showToast("Error: Current withdrawal PIN does not match.");
-      return;
-    }
+
     if (!/^\d{4}$/.test(newWithdrawalPassword)) {
-      showToast("Error: New withdrawal PIN must be exactly 4 digits.");
+      showToast('Error: New withdrawal PIN must be exactly 4 digits.');
       return;
     }
     if (newWithdrawalPassword !== confirmWithdrawalPassword) {
-      showToast("Error: Confirm withdrawal PIN does not match new withdrawal PIN.");
+      showToast('Error: Confirm withdrawal PIN does not match.');
       return;
     }
+    if (oldWithdrawalPassword === newWithdrawalPassword) {
+      showToast('Error: New PIN must be different from current PIN.');
+      return;
+    }
+
     setIsSavingPIN(true);
-    setTimeout(() => {
-      setWithdrawalPassword(newWithdrawalPassword);
-      setOldWithdrawalPassword('');
-      setNewWithdrawalPassword('');
-      setConfirmWithdrawalPassword('');
-      showToast("✓ Withdrawal PIN changed successfully.");
+    try {
+      const token = localStorage.getItem('reviewer_auth_token');
+      const res = await fetch(`${API_BASE}/auth/change-withdrawal-pin`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ currentPin: oldWithdrawalPassword, newPin: newWithdrawalPassword })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setWithdrawalPassword(newWithdrawalPassword);
+        setOldWithdrawalPassword('');
+        setNewWithdrawalPassword('');
+        setConfirmWithdrawalPassword('');
+        showToast('✓ Withdrawal PIN changed successfully.');
+      } else {
+        showToast('Error: ' + (data.error || 'Failed to update withdrawal PIN.'));
+      }
+    } catch (err) {
+      showToast('Network error. Please try again.');
+    } finally {
       setIsSavingPIN(false);
-    }, 500);
+    }
   };
 
   const triggerUserImageAttach = () => {
@@ -1293,6 +1330,30 @@ export default function DashboardPage({
       }
     } catch (err) {
       showToast("Support message transmission network error.");
+    }
+  };
+
+  const handleDeleteChatMessage = async (messageId: string) => {
+    // Optimistically remove from UI immediately
+    setChatMessages(prev => prev.filter(m => m.id !== messageId));
+    try {
+      const token = localStorage.getItem('reviewer_auth_token');
+      const res = await fetch(`${API_BASE}/chat/${messageId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        // Revert on failure — re-fetch history
+        const chatRes = await fetch(`${API_BASE}/chat/history`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (chatRes.ok) {
+          const chatData = await chatRes.json();
+          setChatMessages(chatData);
+        }
+      }
+    } catch (err) {
+      // Silent fail — message already removed from UI
     }
   };
 
@@ -4411,8 +4472,25 @@ export default function DashboardPage({
                         {chatMessages.map((msg) => (
                           <div
                             key={msg.id}
-                            className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                            className={`flex group ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
                           >
+                            {/* Three-dot delete button — shows on hover, left side for user msgs */}
+                            {msg.sender === 'user' && (
+                              <div className="flex items-center mr-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                                <button
+                                  onClick={() => handleDeleteChatMessage(msg.id)}
+                                  title="Delete message"
+                                  className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                    <circle cx="10" cy="4" r="1.5"/>
+                                    <circle cx="10" cy="10" r="1.5"/>
+                                    <circle cx="10" cy="16" r="1.5"/>
+                                  </svg>
+                                </button>
+                              </div>
+                            )}
+
                             <div className={`max-w-[85%] rounded-xl px-3 py-2 md:px-4 md:py-2.5 text-xs shadow-xxs border ${msg.sender === 'user'
                               ? 'bg-[#131921] border-[#131921] text-white rounded-tr-none'
                               : 'bg-white border-gray-200 text-gray-800 rounded-tl-none'
@@ -4432,6 +4510,23 @@ export default function DashboardPage({
                                 {msg.time}
                               </span>
                             </div>
+
+                            {/* Three-dot delete button — right side for admin/support msgs */}
+                            {msg.sender !== 'user' && (
+                              <div className="flex items-center ml-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                                <button
+                                  onClick={() => handleDeleteChatMessage(msg.id)}
+                                  title="Delete message"
+                                  className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                    <circle cx="10" cy="4" r="1.5"/>
+                                    <circle cx="10" cy="10" r="1.5"/>
+                                    <circle cx="10" cy="16" r="1.5"/>
+                                  </svg>
+                                </button>
+                              </div>
+                            )}
                           </div>
                         ))}
 
