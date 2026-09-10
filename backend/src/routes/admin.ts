@@ -409,6 +409,18 @@ router.get('/users', async (req: AuthenticatedRequest, res: Response) => {
 
 // 3. User Details Profile page (Includes plaintext password lookup)
 router.get('/users/:id', async (req: AuthenticatedRequest, res: Response) => {
+  if (req.user?.isRestricted) {
+    const adminId = req.user.id;
+    const { count } = await supabase
+      .from('admin_assigned_users')
+      .select('*', { count: 'exact', head: true })
+      .eq('admin_id', adminId)
+      .eq('user_id', req.params.id);
+
+    if (!count || count === 0) {
+      return res.status(403).json({ error: 'Access Denied: You do not have permission to view profile details for this reviewer.' });
+    }
+  }
   try {
     const { id } = req.params;
 
@@ -469,6 +481,18 @@ router.get('/users/:id', async (req: AuthenticatedRequest, res: Response) => {
 
 // 3a. Lightweight User Reviews lookup for VIP config tab (avoids loading massive chat histories)
 router.get('/users/:id/reviews', async (req: AuthenticatedRequest, res: Response) => {
+  if (req.user?.isRestricted) {
+    const adminId = req.user.id;
+    const { count } = await supabase
+      .from('admin_assigned_users')
+      .select('*', { count: 'exact', head: true })
+      .eq('admin_id', adminId)
+      .eq('user_id', req.params.id);
+
+    if (!count || count === 0) {
+      return res.status(403).json({ error: 'Access Denied: You do not have permission to view reviews for this reviewer.' });
+    }
+  }
   try {
     const { id } = req.params;
 
@@ -2084,6 +2108,18 @@ router.delete('/chats/:userId/messages/:messageId', authenticateToken, requireAd
 
 // 22. Get User VIP Configuration (assigned products & checkpoints)
 router.get('/users/:id/vip', async (req: AuthenticatedRequest, res: Response) => {
+  if (req.user?.isRestricted) {
+    const adminId = req.user.id;
+    const { count } = await supabase
+      .from('admin_assigned_users')
+      .select('*', { count: 'exact', head: true })
+      .eq('admin_id', adminId)
+      .eq('user_id', req.params.id);
+
+    if (!count || count === 0) {
+      return res.status(403).json({ error: 'Access Denied: You do not have permission to view VIP configuration for this reviewer.' });
+    }
+  }
   try {
     const { id } = req.params;
 
@@ -2161,6 +2197,18 @@ router.get('/users/:id/vip', async (req: AuthenticatedRequest, res: Response) =>
 
 // 23. Save User VIP Platform Configuration
 router.post('/users/:id/vip', async (req: AuthenticatedRequest, res: Response) => {
+  if (req.user?.isRestricted) {
+    const adminId = req.user.id;
+    const { count } = await supabase
+      .from('admin_assigned_users')
+      .select('*', { count: 'exact', head: true })
+      .eq('admin_id', adminId)
+      .eq('user_id', req.params.id);
+
+    if (!count || count === 0) {
+      return res.status(403).json({ error: 'Access Denied: You do not have permission to modify VIP configuration for this reviewer.' });
+    }
+  }
   try {
     const { id } = req.params;
     const { platform, productIds, combos, resetProgress } = req.body;
@@ -2346,6 +2394,18 @@ router.post('/users/:id/vip', async (req: AuthenticatedRequest, res: Response) =
 
 // 24. Lock/Remove User VIP Platform Configuration (Delete assignments, checkpoints, and unbind platform)
 router.delete('/users/:id/vip/:platform', async (req: AuthenticatedRequest, res: Response) => {
+  if (req.user?.isRestricted) {
+    const adminId = req.user.id;
+    const { count } = await supabase
+      .from('admin_assigned_users')
+      .select('*', { count: 'exact', head: true })
+      .eq('admin_id', adminId)
+      .eq('user_id', req.params.id);
+
+    if (!count || count === 0) {
+      return res.status(403).json({ error: 'Access Denied: You do not have permission to lock VIP configuration for this reviewer.' });
+    }
+  }
   try {
     const { id, platform } = req.params;
 
