@@ -361,12 +361,13 @@ export default function DashboardPage({
 
       // 1. Process User details, balances, and system settings configurations
       if (!userRes.ok) {
-        onLogout();
+        if (userRes.status === 401 || userRes.status === 403) {
+          onLogout();
+        }
         return;
       }
       const userData = await userRes.json();
       if (!userData) {
-        onLogout();
         return;
       }
 

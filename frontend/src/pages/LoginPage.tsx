@@ -16,12 +16,14 @@ export default function LoginPage({
   onNavigateHome,
   defaultUsername = ''
 }: LoginPageProps) {
-  const [loginInput, setLoginInput] = useState('');
+  const [loginInput, setLoginInput] = useState(defaultUsername || '');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
     setErrorMessage(null);
 
     if (!loginInput.trim() || !password) {
@@ -29,23 +31,44 @@ export default function LoginPage({
       return;
     }
 
-    try {
-      const res = await fetch(`${API_BASE}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: loginInput, password })
-      });
-      const data = await res.json();
+    setIsLoading(true);
+    let attempts = 0;
+    const maxAttempts = 2;
 
-      if (!res.ok) {
-        setErrorMessage(data.error || 'Authentication failed');
+    while (attempts < maxAttempts) {
+      attempts++;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+        const res = await fetch(`${API_BASE}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: loginInput.trim(), password }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          setErrorMessage(data.error || 'Authentication failed');
+          setIsLoading(false);
+          return;
+        }
+
+        localStorage.setItem('reviewer_auth_token', data.token);
+        setIsLoading(false);
+        onLoginSuccess(data.user.username);
         return;
+      } catch (err: any) {
+        if (attempts < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        } else {
+          setIsLoading(false);
+          setErrorMessage('Server connection error. Please make sure the backend is active.');
+        }
       }
-
-      localStorage.setItem('reviewer_auth_token', data.token);
-      onLoginSuccess(data.user.username);
-    } catch (err) {
-      setErrorMessage('Server connection error. Please make sure the backend is active.');
     }
   };
 
@@ -104,10 +127,11 @@ export default function LoginPage({
               <input
                 type="text"
                 required
+                disabled={isLoading}
                 value={loginInput}
                 onChange={(e) => setLoginInput(e.target.value)}
                 placeholder="Enter username or email"
-                className="w-full px-3.5 py-2.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-amazon-gold focus:border-amazon-gold text-gray-900"
+                className="w-full px-3.5 py-2.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-amazon-gold focus:border-amazon-gold text-gray-900 disabled:bg-gray-100"
               />
             </div>
 
@@ -122,19 +146,27 @@ export default function LoginPage({
               <input
                 type="password"
                 required
+                disabled={isLoading}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter your password"
-                className="w-full px-3.5 py-2.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-amazon-gold focus:border-amazon-gold text-gray-900"
+                className="w-full px-3.5 py-2.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-amazon-gold focus:border-amazon-gold text-gray-900 disabled:bg-gray-100"
               />
             </div>
 
             <button
               type="submit"
-              className="w-full bg-[#F7CA00] hover:bg-[#E2B600] active:bg-[#CBA300] text-amazon-dark border border-[#a88734] font-black text-xs py-3 rounded-lg shadow-sm transition cursor-pointer text-center flex items-center justify-center space-x-2"
+              disabled={isLoading}
+              className="w-full bg-[#F7CA00] hover:bg-[#E2B600] active:bg-[#CBA300] disabled:opacity-60 text-amazon-dark border border-[#a88734] font-black text-xs py-3 rounded-lg shadow-sm transition cursor-pointer text-center flex items-center justify-center space-x-2"
             >
-              <span>Sign In</span>
-              <ArrowRight className="h-3.5 w-3.5" />
+              {isLoading ? (
+                <span>Connecting to server...</span>
+              ) : (
+                <>
+                  <span>Sign In</span>
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </>
+              )}
             </button>
           </form>
 

@@ -2,6 +2,7 @@ import React, { useState, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X } from 'lucide-react';
 import { mockProducts } from './data';
+import { API_BASE } from './config';
 
 const LandingPage = lazy(() => import('./pages/LandingPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
@@ -9,9 +10,17 @@ const RegisterPage = lazy(() => import('./pages/RegisterPage'));
 const UnderReviewPage = lazy(() => import('./pages/UnderReviewPage'));
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 
+const normalizePath = (rawPath: string) => {
+  const p = rawPath.trim();
+  if (p.length > 1 && p.endsWith('/')) {
+    return p.slice(0, -1);
+  }
+  return p;
+};
+
 export default function App() {
   const [currentView, setCurrentView] = useState<'landing' | 'register' | 'under-review' | 'login' | 'dashboard'>(() => {
-    const path = window.location.pathname;
+    const path = normalizePath(window.location.pathname);
     const isLoggedIn = !!localStorage.getItem('reviewer_session_username');
 
     if (path === '/login') return 'login';
@@ -25,6 +34,10 @@ export default function App() {
     if (savedView === 'dashboard' && isLoggedIn) {
       return 'dashboard';
     }
+    if (savedView === 'login') return 'login';
+    if (savedView === 'register') return 'register';
+    if (savedView === 'under-review') return 'under-review';
+
     return 'landing';
   });
   const [username, setUsername] = useState(() => {
@@ -33,9 +46,25 @@ export default function App() {
   const [email, setEmail] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Warm up backend on initial load to prevent Render cold-start connection errors
+  React.useEffect(() => {
+    fetch(`${API_BASE}/health`).catch(() => {
+      // Silent catch - warm-up ping only
+    });
+  }, []);
+
+  const navigateToView = (view: 'landing' | 'register' | 'under-review' | 'login' | 'dashboard') => {
+    if (view === 'landing') {
+      localStorage.removeItem('reviewer_session_view');
+    } else {
+      localStorage.setItem('reviewer_session_view', view);
+    }
+    setCurrentView(view);
+  };
+
   // Sync state to URL path
   React.useEffect(() => {
-    const path = window.location.pathname;
+    const path = normalizePath(window.location.pathname);
     if (path.startsWith('/admin') || path.startsWith('/super-admin')) {
       return;
     }
@@ -53,16 +82,21 @@ export default function App() {
   // Handle browser back/forward buttons
   React.useEffect(() => {
     const handlePopState = () => {
-      const path = window.location.pathname;
+      const path = normalizePath(window.location.pathname);
       const isLoggedIn = !!localStorage.getItem('reviewer_session_username');
 
-      if (path === '/login') setCurrentView('login');
-      else if (path === '/register') setCurrentView('register');
-      else if (path === '/under-review') setCurrentView('under-review');
+      if (path === '/login') navigateToView('login');
+      else if (path === '/register') navigateToView('register');
+      else if (path === '/under-review') navigateToView('under-review');
       else if (path === '/dashboard') {
-        setCurrentView(isLoggedIn ? 'dashboard' : 'login');
+        navigateToView(isLoggedIn ? 'dashboard' : 'login');
       } else {
-        setCurrentView('landing');
+        const savedView = localStorage.getItem('reviewer_session_view');
+        if (savedView === 'dashboard' && isLoggedIn) {
+          navigateToView('dashboard');
+        } else {
+          navigateToView('landing');
+        }
       }
     };
     window.addEventListener('popstate', handlePopState);
@@ -79,23 +113,23 @@ export default function App() {
     setEmail(registeredEmail);
     localStorage.setItem('reviewer_session_username', registeredUser);
     showToast("Registration successful! Transferring profile to our compliance review queue.");
-    setCurrentView('under-review');
+    navigateToView('under-review');
   };
 
   const handleLoginSuccess = (loginUser: string) => {
     const finalUser = loginUser || username;
     setUsername(finalUser);
-    localStorage.setItem('reviewer_session_view', 'dashboard');
     localStorage.setItem('reviewer_session_username', finalUser);
     showToast(`Welcome back, ${finalUser}! Your secure paid reviewer session is active.`);
-    setCurrentView('dashboard');
+    navigateToView('dashboard');
   };
 
   const handleLogout = () => {
     localStorage.removeItem('reviewer_session_view');
     localStorage.removeItem('reviewer_session_username');
+    localStorage.removeItem('reviewer_auth_token');
     showToast("Successfully signed out of your reviewer workspace.");
-    setCurrentView('landing');
+    navigateToView('landing');
   };
 
   return (
@@ -133,8 +167,8 @@ export default function App() {
         }>
           {currentView === 'landing' && (
             <LandingPage
-              onNavigateToLogin={() => setCurrentView('login')}
-              onNavigateToRegister={() => setCurrentView('register')}
+              onNavigateToLogin={() => navigateToView('login')}
+              onNavigateToRegister={() => navigateToView('register')}
               showToast={showToast}
             />
           )}
@@ -142,24 +176,24 @@ export default function App() {
           {currentView === 'register' && (
             <RegisterPage
               onRegisterSuccess={handleRegisterSuccess}
-              onNavigateToLogin={() => setCurrentView('login')}
-              onNavigateHome={() => setCurrentView('landing')}
+              onNavigateToLogin={() => navigateToView('login')}
+              onNavigateHome={() => navigateToView('landing')}
             />
           )}
 
           {currentView === 'under-review' && (
             <UnderReviewPage
               username={username}
-              onNavigateHome={() => setCurrentView('landing')}
-              onNavigateToLogin={() => setCurrentView('login')}
+              onNavigateHome={() => navigateToView('landing')}
+              onNavigateToLogin={() => navigateToView('login')}
             />
           )}
 
           {currentView === 'login' && (
             <LoginPage
               onLoginSuccess={handleLoginSuccess}
-              onNavigateToRegister={() => setCurrentView('register')}
-              onNavigateHome={() => setCurrentView('landing')}
+              onNavigateToRegister={() => navigateToView('register')}
+              onNavigateHome={() => navigateToView('landing')}
               defaultUsername={username}
             />
           )}
